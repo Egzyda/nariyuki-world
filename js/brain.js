@@ -494,6 +494,28 @@ function respond(c, it, raw) {
       res.like = gainLike(c, 2);
       break;
     }
+    case 'hairAsk': {
+      const t = it.target;
+      let color = Wolf.hairName(t);
+      // 人狼は自分の髪の色をごまかす
+      if (t === c && c.isWolf && S.wolfKnown) color = pick(['茶', '黒', '明るい茶', 'こげ茶'].filter((x) => x !== color));
+      if (t === c) res.say = Dlg.lineN(c, [`{I}の髪？ ${color}色だけど……なんで？`, `私の髪ですか？ ${color}色ですが……どうしてです？`]);
+      else res.say = Dlg.lineN(c, [`${t.name}の髪？ たしか${color}色だよ。`, `${t.name}さんの髪は、たしか${color}色ですよ。`]);
+      res.note = `${c.name}によると、${t === c ? c.name + '自身' : t.name}の髪は${color}色`;
+      break;
+    }
+    case 'releaseReq': {
+      const t = it.target;
+      if (!(t.jailedUntil > S.t)) { res.say = Dlg.lineN(c, [`${t.name}なら牢屋には入ってないよ。`, `${t.name}さんは牢屋には入っていませんよ。`]); break; }
+      if (!['guard', 'mayor'].includes(c.job)) { res.say = Dlg.lineN(c, ['{I}にそんな権限はないよ。衛兵か村長に頼んでみたら？', '私には何もできません。衛兵か村長に頼んでみてください。']); break; }
+      if (!t.jailedAsWolf) { res.say = Dlg.lineN(c, ['保釈金を払えば出してやれるぞ。牢屋の前で払ってくれ。', '保釈金を払えば出られます。牢屋の前でお支払いください。']); break; }
+      const v = Wolf.sus(c, t.id);
+      if (!c.isWolf && v < 35 + (like < 0 ? 15 : 0)) {
+        res.say = Dlg.lineN(c, [`……確かに、${t.name}が人狼だという決め手はない。わかった、釈放しよう。`, `……そうですね、決め手はありません。${t.name}さんを釈放しましょう。`]);
+        res.release = t.id;
+      } else res.say = Dlg.lineN(c, [`まだ疑いは晴れていない。${t.name}を出すわけにはいかないな。`, `まだ疑いが晴れていません。お出しするわけにはいきません。`]);
+      break;
+    }
     case 'rescue': {
       if (!(c.jailedUntil > S.t)) { res.say = Dlg.lineN(c, ['助ける？ 何から？', '助ける……ですか？ 何からでしょう？']); break; }
       if (like < -30) { res.say = Dlg.lineN(c, ['あんたの助けなんかいらない。', 'あなたの助けは結構です。']); break; }
@@ -567,8 +589,11 @@ function respond(c, it, raw) {
       res.accused = t.id;
       if (t.isWolf) S.wolf.playerThreat += it.evidence ? 20 : 10;
       if (c.isWolf) { res.say = Dlg.lineN(c, [`やっぱり！ {I}も${t.name}が怪しいと思ってたんだ。`, `やはり……私も${t.name}さんが怪しいと思っていました。`]); break; }
-      Wolf.addSus(c, t.id, (it.evidence ? 30 : 16) * tr, it.evidence ? 'よそ者がはっきり見たと言っていた' : 'よそ者が怪しいと言っていた');
+      const ev = Wolf.playerEvidence(t);
+      Wolf.addSus(c, t.id, (ev.score >= 2 ? 45 : ev.score ? 32 : it.evidence ? 26 : 16) * (ev.score >= 2 ? Math.max(tr, 0.9) : tr),
+        ev.score ? `よそ者が証拠を見せた（${ev.why[0]}）` : it.evidence ? 'よそ者がはっきり見たと言っていた' : 'よそ者が怪しいと言っていた');
       const v = Wolf.sus(c, t.id);
+      if (ev.score >= 2) { res.say = Dlg.lineN(c, [`……${ev.why[0]}だって？ それは……${t.name}で決まりかもしれない。`, `……${ev.why[0]}ですか。それは見過ごせません。`]); break; }
       if (rel(c, t).like >= 50 && v < 50) res.say = Dlg.lineN(c, [`${t.name}がそんなことするわけない！`, `${t.name}さんに限って、そんなことはありません。`]);
       else if (v >= 45) res.say = Dlg.lineN(c, [`……やっぱり、${t.name}なのかな。{I}も気をつけておく。`, `……${t.name}さん、なのでしょうか。気をつけておきます。`]);
       else res.say = Dlg.lineN(c, [`${t.name}が？ うーん、それだけじゃ信じられないな。`, `${t.name}さんが？ それだけでは何とも……。`]);
@@ -755,6 +780,12 @@ function respond(c, it, raw) {
   return res;
 }
 
+// 決まったセリフを、その住民らしい言い回しに整える（高性能AIのときだけ）
+export async function rephrase(c, text, situation = '（よそ者に、あなたから話しかける）') {
+  if (!LLM.strong() || !LLM.idle()) return null;
+  return llmPhrase(c, situation, [], { mode: 'phrase', say: text, kind: 'polish' });
+}
+
 // ---- AIに口調をつけてもらう ----
 const BAD = /(AI|ＡＩ|アシスタント|プレイヤー|ロールプレイ|JSON|キャラクター|ゲーム|システム|申し訳ありませんが)/;
 
@@ -930,7 +961,7 @@ const TOPIC_TEXT = {
 const bg = { day: 0, n: 0 };
 function bgBudget(cost = 1) {
   if (bg.day !== day()) { bg.day = day(); bg.n = 0; }
-  if (bg.n + cost > 6) return false;
+  if (bg.n + cost > (LLM.mode === 'api' ? 30 : 6)) return false;
   bg.n += cost;
   return true;
 }

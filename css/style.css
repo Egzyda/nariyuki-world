@@ -226,3 +226,9 @@ h1 { font-size: 44px; margin: 0; letter-spacing: 4px; color: #ffe9a0; text-shado
 #update-btn { font-size: 12px; padding: 5px 12px; border-radius: 16px; background: rgba(255,255,255,.08); color: #cfe0bf; }
 #update-btn.hot { background: #3a7ad0; color: #fff; animation: pulse 1.6s infinite; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(58,122,208,.25); } }
+
+#continue { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+#continue button { text-align: left; padding: 9px 14px; border-radius: 10px; background: rgba(90,140,200,.18); border: 1px solid rgba(120,170,230,.5); color: #d8e8ff; font-size: 14px; }
+#continue button:hover { background: rgba(90,140,200,.32); }
+#continue button small { color: #9ab; margin-left: 8px; }
+#speed #save-btn, #speed #title-btn { flex: 0 0 40px; background: #2c3824; }

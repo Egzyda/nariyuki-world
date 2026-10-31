@@ -39,6 +39,15 @@ function makeChar(def, tx, ty) {
   };
 }
 
+// セーブデータを読み込んだあとの準備
+export function prepareLoaded() {
+  S.rand = mulberry32((Date.now() >>> 0) ^ 0x9e3779b9);
+  buildWorld();
+  for (const c of S.chars) { c.bubble = null; c.hurtUntil = 0; c.moving = false; }
+  S.toasts = []; S.effects = []; S.callout = null; S.banner = null; S.holdId = null; S.meetingPause = false; S.paused = false;
+  if (S.meeting) { S.meeting.ruleWait = null; if (['talking', 'voting'].includes(S.meeting.state)) S.meeting.playerIn = false; }
+}
+
 export function initGame(seed = Date.now()) {
   S.rand = mulberry32(seed >>> 0);
   buildWorld();
@@ -104,8 +113,8 @@ export function update(dtReal) {
   const p = S.player;
   const fast = p.alive && ((p.activity === 'sleep' && p.busyUntil > S.t) || isJailed(p));
   // 働く・鍛えるなどの間は時間を早送り（待たされる感じを減らす）
-  const doing = p.alive && !fast && p.busyUntil > S.t && ['work', 'train', 'research', 'heal', 'eat', 'drink'].includes(p.activity);
-  const gdt = Math.min(dtReal, 0.1) * D.GAME_MIN_PER_SEC * S.speed * (fast ? 25 : doing ? 4 : 1);
+  const doing = p.alive && !fast && p.busyUntil > S.t && ['work', 'train', 'research'].includes(p.activity);
+  const gdt = Math.min(dtReal, 0.1) * D.GAME_MIN_PER_SEC * S.speed * (fast ? 25 : doing ? 2.5 : 1);
   const before = S.t;
   S.t += gdt;
   const h0 = Math.floor(before / 60), h1 = Math.floor(S.t / 60);
@@ -114,6 +123,8 @@ export function update(dtReal) {
   for (const c of S.chars) updateChar(c, gdt);
   if (p.activity === 'sleep' && S.t >= p.busyUntil) { p.activity = null; getOutOfBed(p); toast('朝になった。'); }
   if (p.activity && p.activity !== 'sleep' && S.t >= p.busyUntil && p.inBed) getOutOfBed(p);
+  // 行動の結果は、ゲージが終わったときに出る
+  if (p.onDone && S.t >= p.busyUntil) { const f = p.onDone; p.onDone = null; if (p.alive) f(); }
 }
 
 function hourly(h, d) {
@@ -974,6 +985,12 @@ export function interact(a, b, kind) {
       a.chatLog.push({ who: 'them', text: tp.line });
       if (tp.pending) a.pending = { ...tp.pending, t: S.t };
       S.callout = { id: a.id, text: tp.line, until: performance.now() + 10000 };
+      Brain.rephrase(a, tp.line).then((t) => {
+        if (!t || S.callout?.id !== a.id) return;
+        S.callout.text = t; say(a, t, 8);
+        const last = a.chatLog[a.chatLog.length - 1];
+        if (last?.who === 'them') last.text = t;
+      }).catch(() => {});
       a.busyUntil = S.t + 25; a.activity = 'wait';
       if (tp.note) Wolf.addNote(tp.note);
       break;
@@ -1117,15 +1134,16 @@ function doSteal(a, b) {
   crime(a, b, 'steal', noticed);
 }
 
-function power(c) { return c.str + (c.items.includes('weapon') ? 8 : 0) + (c.hp < 40 ? -4 : 0); }
+function power(c) { return c.str + (c.items.includes('silver') ? 10 : c.items.includes('weapon') ? 8 : 0) + (c.hp < 40 ? -4 : 0) + (c.isWolf && (hour() >= 21 || hour() < 5) ? 8 : 0); }
 
 function doAttack(a, b) {
   S.stats.fights++;
   faceTo(a, b);
   const hit = power(a) + S.rand() * 10 > power(b) * 0.7 + S.rand() * 10;
   if (hit) {
-    const dmg = 5 + Math.round(power(a) * 0.4 + S.rand() * 6);
+    const dmg = Wolf.adjustDamage(a, b, 5 + Math.round(power(a) * 0.4 + S.rand() * 6));
     b.hp -= dmg;
+    if (b.isWolf && dmg <= 0 && a.isPlayer) toast('……効いていない！？ 普通の武器では傷ひとつ付かないようだ。');
     b.hurtUntil = performance.now() + 300;
     say(a, pick(['オラァ！', 'くらえ！', 'これでも食らえ！']));
     setTimeout(() => b.alive && say(b, pick(['ぐはっ', 'いってえ！', 'うっ…'])), 500);
@@ -1388,6 +1406,12 @@ export function facilityActions(fid) {
   if (fid === 'diner') acts.push({ id: 'steal:till', label: '売上金をこっそり抜く（盗み）' });
   if (fid === 'tavern') acts.push({ id: 'steal:sake', label: '酒瓶をくすねる（盗み）' });
   if (fid === 'workshop' && !p.items.includes('weapon')) acts.push({ id: 'steal:weapon', label: '武器をこっそり持ち出す（盗み）' });
+  if (fid === 'workshop' && S.wolfKnown && !p.items.includes('silver')) {
+    const smith = bossIn('workshop', 'smith');
+    acts.push(smith ? { id: 'silver', label: `${smith.name}に銀のナイフを作ってもらう（25G）人狼を倒せる`, disabled: p.coins < 25 }
+      : { id: 'nosilver', label: '銀のナイフは鍛冶屋がいる時に頼もう', disabled: true });
+  }
+  if (f.home && !f.mine && S.wolfKnown) acts.push({ id: 'search', label: '🔍 家の中を調べる（無断・人狼の証拠を探す）' });
   if (fid === 'townhall') {
     const debt = S.taxDebt.player || 0;
     acts.push({ id: 'paydebt', label: debt ? `税金の滞納分を払う（${debt}G）` : `税金の滞納はない（税金は毎朝${S.rules.tax}G）`, disabled: !debt });
@@ -1430,7 +1454,7 @@ export function doFacility(fid, act) {
   const p = S.player;
   const f = FAC[fid];
   const sp = SPOTS[fid];
-  const busy = (min, a = 'busy') => { p.activity = a; p.busyStart = S.t; p.busyUntil = S.t + min; };
+  const busy = (min, a = 'busy', done = null) => { p.activity = a; p.busyStart = S.t; p.busyUntil = S.t + min; p.onDone = done; };
   if (act.startsWith('hire:')) {
     const jid = act.slice(5);
     const boss = bossIn(fid, jid);
@@ -1449,8 +1473,12 @@ export function doFacility(fid, act) {
     case 'eat':
       if (S.foodStock < 1) return toast('食堂の食料が尽きている！');
       if (!playerSpend(D.MEAL_COST)) return;
-      S.foodStock -= 1; p.hunger = clamp(p.hunger + 55, 0, 100); payCooks(1); seatPlayer(sp.seat); busy(30, 'eat'); toast('おいしいご飯を食べた。満腹度+55');
-      for (const o of S.chars) if (o.companion?.arrived && o.companion.dest === 'diner') addLike(o, p, 2);
+      S.foodStock -= 1; payCooks(1); seatPlayer(sp.seat);
+      toast('ご飯を注文した……');
+      busy(30, 'eat', () => {
+        p.hunger = clamp(p.hunger + 55, 0, 100); toast('おいしいご飯を食べた。満腹度+55'); floatText(p, '満腹+55', '#ffd27a');
+        for (const o of S.chars) if (o.companion?.arrived && o.companion.dest === 'diner') addLike(o, p, 2);
+      });
       break;
     case 'sneak': {
       if (S.foodStock < 1) return toast('食料がない。');
@@ -1464,6 +1492,27 @@ export function doFacility(fid, act) {
     case 'deposit': p.bank = (p.bank || 0) + Math.floor(p.coins); p.coins -= Math.floor(p.coins); toast(`タンスにしまった（${Math.floor(p.bank)}G）`); break;
     case 'withdraw': p.coins += p.bank; toast(`${Math.floor(p.bank)}Gを取り出した`); p.bank = 0; break;
     case 'eatown': eatOwnFood(); break;
+    case 'silver': {
+      const smith = bossIn('workshop', 'smith');
+      if (!smith) return;
+      if (smith.isWolf) { say(smith, '銀？ ……うちじゃ扱ってないね。', 5); Wolf.addNote(`${smith.name}は銀のナイフ作りを妙に嫌がった`); return; }
+      if (!playerSpend(25)) return;
+      smith.coins += 25;
+      say(smith, '銀は扱いが難しいが……任せとけ。', 4);
+      busy(30, 'busy', () => { p.items.push('silver'); toast('🗡️ 銀のナイフを手に入れた！ 人狼を倒せる唯一の武器だ。'); });
+      break;
+    }
+    case 'search': {
+      const home = residents().filter((o) => o.alive && o.home === fid && facAt(...tilePos(o)) === f);
+      if (home.length) { say(home[0], 'ちょっと！ 人の家で何してるの！', 4); addLike(home[0], p, -15); return toast(`${home[0].name}に見つかった！`); }
+      busy(20, 'busy', () => {
+        const ws = witnesses(p, [p]);
+        if (ws.length) { for (const w of ws) { addLike(w, p, -10); memo(w, `よそ者が${f.name}を勝手に調べていた`, 'crime'); } }
+        const r = Wolf.searchHouse(fid);
+        S.banner = { title: `🔍 ${f.name}を調べた`, text: r, until: performance.now() + 7000 };
+      });
+      break;
+    }
     case 'investigate': {
       const text = Wolf.investigate(fid);
       if (text) S.banner = { title: '🔍 現場の手がかり', text: text + '（手帳に書きとめた）', until: performance.now() + 9000 };
@@ -1483,17 +1532,19 @@ export function doFacility(fid, act) {
     }
     case 'drink': {
       if (!playerSpend(D.DRINK_COST)) return;
-      seatPlayer(sp.seat); busy(30, 'drink');
-      const pool = residents().filter((o) => o.alive).flatMap((o) => o.memory.slice(-4).map((m) => m.replace(/^\d+日目 /, '')));
-      const juicy = pool.filter((m) => /見た|された|盗まれ|殴られ|亡く|捕まった|拾った|助けて|物音|遠吠え|通報/.test(m));
-      if (S.wolfKnown) for (const o of residents()) { const top = Wolf.topSuspect(o); if (o.alive && top && top.v >= 35) juicy.push(`${o.name}は${top.t.isPlayer ? 'よそ者' : top.t.name}を疑っているらしい`); }
-      const rumor = juicy.length ? pick(juicy) : pick(['最近は平和だねえ', 'ツヅミの奴、また話を盛ってたらしい', 'カゲはゴウと仲が悪いんだと', 'バンは金に弱いって噂だ', '研究所のシオンは何でも調べたがる']);
-      p.hunger = clamp(p.hunger + 10, 0, 100);
-      toast(`🍺 噂：「${rumor}」（手帳に書きとめた）`);
-      log(`酒場で聞いた噂：${rumor}`);
-      Wolf.addNote(`酒場の噂：${rumor}`);
-      for (const o of nearby(p, 5)) addLike(o, p, 2);
+      seatPlayer(sp.seat);
       for (const o of S.chars) if (o.companion?.arrived && o.companion.dest === 'tavern') { addLike(o, p, 4); say(o, '乾杯！'); }
+      busy(30, 'drink', () => {
+        const pool = residents().filter((o) => o.alive).flatMap((o) => o.memory.slice(-4).map((m) => m.replace(/^\d+日目 /, '')));
+        const juicy = pool.filter((m) => /見た|された|盗まれ|殴られ|亡く|捕まった|拾った|助けて|物音|遠吠え|通報/.test(m));
+        if (S.wolfKnown) for (const o of residents()) { const top = Wolf.topSuspect(o); if (o.alive && top && top.v >= 35) juicy.push(`${o.name}は${top.t.isPlayer ? 'よそ者' : top.t.name}を疑っているらしい`); }
+        const rumor = juicy.length ? pick(juicy) : pick(['最近は平和だねえ', 'ツヅミの奴、また話を盛ってたらしい', 'カゲはゴウと仲が悪いんだと', 'バンは金に弱いって噂だ', '研究所のシオンは何でも調べたがる']);
+        p.hunger = clamp(p.hunger + 10, 0, 100);
+        toast(`🍺 噂：「${rumor}」（手帳に書きとめた）`);
+        log(`酒場で聞いた噂：${rumor}`);
+        Wolf.addNote(`酒場の噂：${rumor}`);
+        for (const o of nearby(p, 5)) addLike(o, p, 2);
+      });
       break;
     }
     case 'sleep':
@@ -1502,14 +1553,16 @@ export function doFacility(fid, act) {
       seatPlayer(sp.bed, true);
       p.activity = 'sleep'; p.busyStart = S.t; p.busyUntil = nextMorning(); toast('おやすみ…（時間が早く進みます）'); break;
     case 'weapon': if (!playerSpend(D.WEAPON_COST)) return; p.items.push('weapon'); toast('鉄の棍棒を手に入れた！ 腕力+8'); for (const o of nearby(p, 6)) addFear(o, p, 5); break;
-    case 'heal': if (!playerSpend(D.HEAL_COST)) return; p.hp = clamp(p.hp + 45, 0, 100); payDoctor(3); seatPlayer(sp.bed, true); busy(40, 'heal'); toast('治療を受けた。体力+45'); break;
-    case 'train': seatPlayer(sp.train); p.str += 0.9 * (1 - p.str / 45); p.hunger = clamp(p.hunger - 3, 0, 100); busy(60, 'train'); toast(`鍛えた！ 腕力 ${p.str.toFixed(1)}`); break;
+    case 'heal': if (!playerSpend(D.HEAL_COST)) return; payDoctor(3); seatPlayer(sp.bed, true);
+      busy(40, 'heal', () => { p.hp = clamp(p.hp + 45, 0, 100); toast('治療が終わった。体力+45'); floatText(p, '体力+45', '#7ae07a'); }); break;
+    case 'train': seatPlayer(sp.train);
+      busy(60, 'train', () => { p.str += 0.9 * (1 - p.str / 45); p.hunger = clamp(p.hunger - 3, 0, 100); toast(`鍛え終えた！ 腕力 ${p.str.toFixed(1)}`); floatText(p, '腕力UP', '#ffb070'); }); break;
     case 'surrender': S.wanted.delete('player'); jail(p, 4 * 60); toast('自首した。4時間の牢屋…'); for (const o of residents()) if (o.job === 'guard') addLike(o, p, 10); log('よそ者が自首した。', 'event'); break;
     case 'research':
       if (!facOpen('lab')) return;
       S.meteor.state = 'researching'; S.meteor.holder = 'player'; busy(120, 'research');
       toast('光る石を調べ始めた…'); break;
-    case 'work': seatPlayer(sp.work); busy(60, 'work'); toast(`${JOBS[p.job].name}として働く…`); break;
+    case 'work': { seatPlayer(sp.work); const c0 = p.coins; busy(60, 'work', () => toast(`ひと仕事終えた。稼ぎ +${(p.coins - c0).toFixed(1)}G`)); toast(`${JOBS[p.job].name}として働く…`); break; }
     case 'burgle': {
       const owners = residents().filter((o) => o.alive && o.home === fid);
       const home = owners.filter((o) => facAt(...tilePos(o)) === f);
@@ -1596,7 +1649,8 @@ export function charActions(t) {
       { id: 'givecoin', label: '1G渡す', disabled: p.coins < 1 },
       { id: 'givefood', label: '食料を差し入れる', disabled: p.food < 1 },
     ];
-    if (!t.jailedAsWolf) acts.push({ id: 'bail', label: `保釈金を払って出してやる（${D.BAIL_COST}G）`, disabled: p.coins < D.BAIL_COST });
+    if (t.jailedAsWolf) acts.push({ id: 'nobail', label: '保釈できない（人狼の疑い）。衛兵か村長に釈放を頼むか、逃がすしかない', disabled: true });
+    else acts.push({ id: 'bail', label: `保釈金を払って出してやる（${D.BAIL_COST}G）${p.coins < D.BAIL_COST ? '　※お金が足りない' : ''}`, disabled: p.coins < D.BAIL_COST });
     acts.push({ id: 'breakout', label: '鍵をこじ開けて逃がす（犯罪）' });
     return acts;
   }
@@ -1619,7 +1673,7 @@ export function releaseFromJail(t, how) {
   const wasWolfSuspect = t.jailedAsWolf;
   t.jailedUntil = S.t; t.jailedAsWolf = false;
   addLike(t, p, 25);
-  memo(t, how === 'bail' ? 'よそ者が保釈金を払って牢屋から出してくれた' : 'よそ者が牢屋から逃がしてくれた', 'gift');
+  memo(t, how === 'bail' ? 'よそ者が保釈金を払って牢屋から出してくれた' : how === 'petition' ? 'よそ者が掛け合って牢屋から出してくれた' : 'よそ者が牢屋から逃がしてくれた', 'gift');
   if (t.deal) {
     const n = Math.min(t.deal.coins, Math.floor(t.coins));
     t.coins -= n; p.coins += n;
@@ -1716,6 +1770,7 @@ export function applyTalkResult(t, r) {
     }
   }
   if (r.note) Wolf.addNote(r.note);
+  if (r.release) { const o = byId(r.release); if (o) { releaseFromJail(o, 'petition'); out.msgs.push(`🔓 ${o.name}が釈放された`); log(`${t.name}の判断で${o.name}が牢屋から釈放された。`, 'event'); } }
   if (r.deal) { t.deal = r.deal; out.msgs.push(`🤝 取引成立：${t.name}を牢屋から出せば${r.deal.coins ? `${r.deal.coins}Gと` : ''}情報をもらえる（保釈金を払うか、逃がす）`); Wolf.addNote(`${t.name}と取引：牢屋から出せば${r.deal.coins}Gと情報`); }
   if (r.rule) {
     const m = Wolf.scheduleMeeting(t.id, 60, 'rule', r.rule);

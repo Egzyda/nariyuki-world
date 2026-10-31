@@ -181,6 +181,7 @@ export const ITEMS = {
   book:     { name: '古い本', icon: '📕', desc: '贈り物。物知りや商売人に喜ばれる。', gift: true, price: 6, shop: 'market' },
   sake:     { name: '酒瓶', icon: '🍶', desc: '贈り物。酒好きに喜ばれる。', gift: true, price: 4, shop: 'tavern' },
   weapon:   { name: '鉄の棍棒', icon: '🏏', desc: '腕力+8' },
+  silver:   { name: '銀のナイフ', icon: '🗡️', desc: '人狼を倒せる唯一の武器（腕力+10）。人に向ければ大けがをさせる。' },
   meteor:   { name: '未知の物質', icon: '💎', desc: '空から落ちてきた光る石。研究所で調べられる。' },
   elixir:   { name: '万能薬', icon: '🧪', desc: '使うと体力が全回復する。' },
   bomb:     { name: '爆薬', icon: '💣', desc: '施設を爆破したり、脅しに使える。' },

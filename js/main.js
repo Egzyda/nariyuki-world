@@ -8,6 +8,7 @@ import * as Brain from './brain.js';
 import * as Wolf from './wolf.js';
 import * as Town from './town.js';
 import { VERSION } from './version.js';
+import * as Save from './save.js';
 import { draw, view, resetRenderCache } from './render.js';
 
 const $ = (s) => document.querySelector(s);
@@ -50,10 +51,12 @@ LLM.onQuota = () => {
 LLM.onSwitched = (ok) => { aiLoad = null; toast(ok ? '🧠 ブラウザ内AIに切り替わりました' : 'ブラウザ内AIを読み込めませんでした。AIなしで続けます'); };
 let aiLoad = null;
 
-$('#start').onclick = async () => {
+async function prepareAI() {
   const mode = document.querySelector('input[name=mode]:checked').value;
   $('#start').disabled = true;
-  if (mode !== 'none') {
+  if (LLM.ready && LLM.mode === mode) return;
+  if (mode === 'none') { LLM.mode = 'none'; return; }
+  {
     $('#loading').hidden = false;
     try {
       await LLM.init(mode, (p, text) => {
@@ -67,21 +70,66 @@ $('#start').onclick = async () => {
       await new Promise((r) => setTimeout(r, 1500));
     }
   }
-  startGame();
-};
+}
 
-function startGame() {
+$('#start').onclick = async () => { await prepareAI(); startGame(); };
+
+// ---------- つづきから ----------
+function renderContinue() {
+  const box = $('#continue');
+  box.innerHTML = '';
+  for (const slot of Save.SLOTS) {
+    const i = Save.info(slot);
+    if (!i) continue;
+    const b = document.createElement('button');
+    b.innerHTML = `▶ つづきから：${Save.SLOT_NAME[slot]}<small>${i.day}日目 ${i.time}　（${new Date(i.at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} 保存）</small>`;
+    b.onclick = async () => { await prepareAI(); continueGame(slot); };
+    box.appendChild(b);
+  }
+}
+renderContinue();
+Wolf.setPolisher((c, t) => Brain.rephrase(c, t, '（広場の話し合いで、みんなに向かって話す）'));
+
+function enterGameScreen() {
   titleDemo = false;
   view.showMinimap = true;
-  Sim.initGame(Date.now());
   resetRenderCache();
   $('#title').hidden = true;
   $('#result').hidden = true;
   $('#game').hidden = false;
+  $('#start').disabled = false;
   resize();
-  lastBoardSeen = S.postSeq;
+  setSpeed(1);
   view.camX = S.player.x - cv.width / view.zoom / 2;
   view.camY = S.player.y - cv.height / view.zoom / 2;
+  boardSig = ''; logSig = ''; lastAutoDay = day();
+}
+
+function continueGame(slot) {
+  if (!Save.load(slot)) { toast('セーブデータを読み込めなかった。'); $('#start').disabled = false; return; }
+  enterGameScreen();
+  toast(`${day()}日目 ${timeStr()} から再開した。`);
+}
+
+function backToTitle() {
+  if (!confirm('タイトルへ戻りますか？（セーブしていない進み具合は、毎朝のオートセーブまで戻ります）')) return;
+  closeChat(); closeMenu(); closePicker();
+  $('#game').hidden = true;
+  $('#result').hidden = true;
+  $('#title').hidden = false;
+  startDemo();
+  titleDemo = true;
+  renderContinue();
+}
+
+let lastAutoDay = 0;
+$('#save-btn').onclick = () => toast(Save.save('manual') ? `💾 セーブした（${day()}日目 ${timeStr()}）` : 'セーブに失敗した……');
+$('#title-btn').onclick = backToTitle;
+
+function startGame() {
+  Sim.initGame(Date.now());
+  enterGameScreen();
+  lastBoardSeen = S.postSeq;
   toast('WASD/矢印で移動（Shiftで走る）。人や建物の中で F キー。');
   toast('目の前の🏡があなたの家。タンスにお金をしまえる。');
   if (LLM.available()) toast('住民はAIで話します。自由に話しかけてみよう。');
@@ -128,7 +176,7 @@ $('#update-btn').onclick = async () => {
   btn.disabled = true; $('#update-note').textContent = '最新版を読み込み中…';
   // ブラウザに残っている古いファイルを、サーバーの最新版で置き換えてから再読み込み
   const files = ['./', 'index.html', 'css/style.css', 'version.json',
-    ...['main', 'sim', 'world', 'render', 'sprites', 'state', 'data', 'brain', 'dialog', 'llm', 'llm-worker', 'wolf', 'town', 'version'].map((f) => `js/${f}.js`)];
+    ...['main', 'sim', 'world', 'render', 'sprites', 'state', 'data', 'brain', 'dialog', 'llm', 'llm-worker', 'wolf', 'town', 'version', 'save'].map((f) => `js/${f}.js`)];
   await Promise.all(files.map((f) => fetch(f, { cache: 'reload' }).catch(() => {})));
   location.reload();
 };
@@ -146,6 +194,7 @@ function loop(now) {
     if (!(chatTarget && chatBusy && LLM.generating())) draw(ctx, cv.width, cv.height, dt);
     uiTimer -= dt;
     if (uiTimer <= 0) { uiTimer = 0.3; updateUI(); }
+    if (day() !== lastAutoDay && S.player.alive && !S.over) { lastAutoDay = day(); Save.save('auto'); }
     updateToasts();
     if (S.over && $('#result').hidden) showResult();
   }
@@ -479,9 +528,9 @@ function switchTab(tab) {
   updateUI();
 }
 
-document.querySelectorAll('#speed button').forEach((b) => b.onclick = () => setSpeed(+b.dataset.speed));
+document.querySelectorAll('#speed [data-speed]').forEach((b) => b.onclick = () => setSpeed(+b.dataset.speed));
 function setSpeed(v) {
-  document.querySelectorAll('#speed button').forEach((b) => b.classList.toggle('on', +b.dataset.speed === v));
+  document.querySelectorAll('#speed [data-speed]').forEach((b) => b.classList.toggle('on', +b.dataset.speed === v));
   if (v === 0) S.paused = true; else { S.paused = false; S.speed = v; }
 }
 
@@ -592,6 +641,7 @@ function renderItems() {
     const it = ITEMS[k];
     html += row(it.icon, `${it.name}${n > 1 ? ' ×' + n : ''}`, it.desc, k === 'elixir' ? '<button data-act="elixir">使う</button>' : '');
   }
+  for (const e of S.evidence || []) html += row(e.kind === 'fur' ? '🐾' : '👕', e.label, '証拠。話し合いや告発で人狼を問い詰めるときに力を持つ。');
   if (!p.items.length) html += '<div class="sub3">アイテムは持っていない。市場で花束・焼き菓子・古い本、酒場で酒瓶が買える。</div>';
   html += '</div><div class="box keys2">住民に話しかけて、会話画面の「渡す」ボタンか「〇〇あげる」と入力すると渡せます。好きな物をもらうと住民はとても喜びます（住民タブで好物がわかる）。</div>';
   if ($('#tab-items')._h !== html) {
@@ -655,6 +705,7 @@ function updateNearCard(n) {
     <div class="row"><span>好感</span>${meter(Math.abs(r.like), 100, likeCol)}<span>${Math.round(r.like)}（${feel}）</span></div>
     <div class="row"><span>恐怖</span>${meter(r.fear, 100, '#a070d0')}<span>${Math.round(r.fear)}</span></div>
     <div>いま：${isJailed(c) ? `🔒 牢屋の中（${Sim.jailText(c)}）` : esc(Brain.actText(c))}</div>
+    <div>髪の色：${JOBS[c.job].hat && JOBS[c.job].hat !== 'glasses' ? '帽子でよく見えない（人に聞けばわかるかも）' : Wolf.hairName(c)}</div>
     ${c.likesItem ? `<div>好物：${ITEMS[c.likesItem].icon}${ITEMS[c.likesItem].name}</div>` : ''}
     ${c.quest ? `<div>📝 頼まれごと：${esc(c.quest.label)}を届ける</div>` : ''}
     ${c.companion ? '<div>🤝 あなたと同行中</div>' : ''}`;
@@ -680,37 +731,52 @@ function updateCallout() {
 const pick2 = (a) => a[Math.floor(Math.random() * a.length)];
 
 // ---------- 話し合い ----------
-let meetingSig = '';
+let meetingSig = '', ctrlSig = '';
 function updateMeetingPanel() {
   const m = S.meeting;
   const el = $('#meeting');
   const show = m && (m.playerIn && ['talking', 'voting'].includes(m.state) || (m.state === 'done' && m.playerIn && !m.closed));
-  if (!show) { el.hidden = true; return; }
+  if (!show) { el.hidden = true; ctrlSig = ''; return; }
   el.hidden = false;
-  const sig = m.state + ':' + m.log.length;
-  if (sig === meetingSig) return;
-  meetingSig = sig;
-  const present = m.present.map((id) => S.chars.find((c) => c.id === id)).filter(Boolean);
-  $('#meeting-head').textContent = `📣 広場の話し合い（${present.length}人参加）`;
-  $('#meeting-log').innerHTML = m.log.map((l) => `<div class="ml ${l.cls}">${l.who ? `<b>${esc(l.who)}</b>` : ''}${esc(l.text)}</div>`).join('');
-  $('#meeting-log').scrollTop = 1e9;
+  // 発言の記録（増えたときだけ書き直す）
+  const sig = m.log.length + ':' + (m.rev || 0);
+  if (sig !== meetingSig) {
+    meetingSig = sig;
+    const present = m.present.map((id) => S.chars.find((c) => c.id === id)).filter(Boolean);
+    $('#meeting-head').textContent = `📣 広場の話し合い（${present.length}人参加）`;
+    $('#meeting-log').innerHTML = m.log.map((l) => `<div class="ml ${l.cls}">${l.who ? `<b>${esc(l.who)}</b>` : ''}${esc(l.text)}</div>`).join('');
+    $('#meeting-log').scrollTop = 1e9;
+  }
+  // 操作部分（段階が変わったときだけ作り直す。入力中の文字は消えない）
+  const cs = m.state + ':' + (m.ruleWait ? 'rule' : '');
+  if (cs === ctrlSig) return;
+  ctrlSig = cs;
   const ctrl = $('#meeting-ctrl');
-  if (m.state === 'talking') {
-    ctrl.innerHTML = `<div class="row"><input id="meeting-text" placeholder="発言する（例：ゴウが夜中に出歩いてるのを見た／ハルは人狼じゃない）" maxlength="60"><button id="meeting-say">言う</button></div>
-      <div class="row"><button id="meeting-vote">投票に進む</button><button id="meeting-leave" class="ghost">その場を離れる</button></div>`;
-    const sayIt = () => { const v = $('#meeting-text').value.trim(); if (v) { Wolf.playerSpeak(v); $('#meeting-text').value = ''; meetingSig = ''; } };
+  const sayRow = `<div class="row"><input id="meeting-text" placeholder="発言する（例：ゴウが夜中に出歩いてるのを見た／ハルは人狼じゃない／夜間外出禁止にしよう）" maxlength="60"><button id="meeting-say">言う</button></div>`;
+  const bindSay = () => {
+    const sayIt = () => { const v = $('#meeting-text').value.trim(); if (v) { Wolf.playerSpeak(v); $('#meeting-text').value = ''; } };
     $('#meeting-say').onclick = sayIt;
     $('#meeting-text').onkeydown = (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); sayIt(); } };
-    $('#meeting-vote').onclick = () => { Wolf.startVoteNow(); meetingSig = ''; };
-    $('#meeting-leave').onclick = () => { Wolf.leaveMeeting(); meetingSig = ''; };
+  };
+  if (m.state === 'talking' && m.ruleWait) {
+    const d = Town.describe(m.ruleWait.item.rule);
+    ctrl.innerHTML = `<div class="sub2">「${esc(d)}」に、あなたは？（意見を言ってから投票してもいい）</div>${sayRow}
+      <div class="row votes"><button data-r="yes">賛成</button><button data-r="no">反対</button><button data-r="abstain" class="ghost">棄権</button></div>`;
+    bindSay();
+    ctrl.querySelectorAll('[data-r]').forEach((b) => b.onclick = () => Wolf.playerRuleVote(b.dataset.r));
+  } else if (m.state === 'talking') {
+    ctrl.innerHTML = `${sayRow}<div class="row"><button id="meeting-vote">投票に進む</button><button id="meeting-leave" class="ghost">その場を離れる</button></div>`;
+    bindSay();
+    $('#meeting-vote').onclick = () => Wolf.startVoteNow();
+    $('#meeting-leave').onclick = () => Wolf.leaveMeeting();
   } else if (m.state === 'voting') {
     const cands = Wolf.voteCandidates().filter((c) => !c.isPlayer);
     ctrl.innerHTML = '<div class="sub2">誰を牢屋に入れる？（あなたの一票）</div><div class="votes">' +
       cands.map((c) => `<button data-v="${c.id}">${esc(c.name)}</button>`).join('') + '<button data-v="abstain" class="ghost">棄権</button></div>';
-    ctrl.querySelectorAll('[data-v]').forEach((b) => b.onclick = () => { Wolf.vote(b.dataset.v); meetingSig = ''; });
+    ctrl.querySelectorAll('[data-v]').forEach((b) => b.onclick = () => Wolf.vote(b.dataset.v));
   } else {
     ctrl.innerHTML = '<button id="meeting-close">閉じる</button>';
-    $('#meeting-close').onclick = () => { m.closed = true; meetingSig = ''; updateMeetingPanel(); };
+    $('#meeting-close').onclick = () => { m.closed = true; updateMeetingPanel(); };
   }
 }
 
@@ -780,5 +846,5 @@ function showResult() {
 }
 
 // デバッグ用
-window.NW = { S, Sim, Brain, view };
+window.NW = { S, Sim, Brain, view, Save, Wolf };
 void FACILITIES;
