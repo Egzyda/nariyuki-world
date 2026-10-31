@@ -2,28 +2,35 @@
 // 施設・職業・住民・イベントはここに追加していけば町が広がる設計。
 
 export const TILE = 32;
-export const MAP_W = 54;
+export const MAP_W = 62;
 export const MAP_H = 36;
 
 export const START_HOUR = 6;          // 1日目 06:00 開始
 export const GAME_MIN_PER_SEC = 6;    // 実時間1秒 = ゲーム内6分
 export const LAST_DAY = 15;           // 15日目の終わりで結果発表
 
-export const MEAL_COST = 2;
-export const HEAL_COST = 3;
-export const WEAPON_COST = 6;
-export const DRINK_COST = 1;
+// お金のバランス：農家で1時間働くと約3〜4G、食堂の1食が3G、毎朝の税金が4G
+export const MEAL_COST = 3;
+export const HEAL_COST = 5;
+export const WEAPON_COST = 15;
+export const DRINK_COST = 2;
+export const FOOD_PRICE = 3;      // 市場の食料
+export const INN_COST = 3;        // 酒場に泊まる
+export const BAIL_COST = 10;      // 保釈金
+export const START_COINS = 12;
+export const NPC_WAGE_RATE = 0.65; // 住民の給料（プレイヤーより少なめ。生活費とつり合う）
 
 // ---- 職業 ----
 // shirt: 服の色 hat: 頭の装備（sprites.js）
 export const JOBS = {
-  farmer:     { name: '農家',   icon: '🌾', color: '#7fb04a', shirt: '#6f9a3a', hat: 'straw',  place: 'farm',     wage: 1,   from: 8,  to: 17 },
-  cook:       { name: '料理人', icon: '🍳', color: '#e0904a', shirt: '#f0f0f0', hat: 'chef',   place: 'diner',    wage: 1,   from: 9,  to: 19 },
-  smith:      { name: '鍛冶屋', icon: '🔨', color: '#9a7a6a', shirt: '#7a5a46', hat: 'bandana', place: 'workshop', wage: 1.2, from: 8,  to: 17 },
-  doctor:     { name: '医者',   icon: '🩺', color: '#e8e8f0', shirt: '#e8eef6', hat: null,     place: 'clinic',   wage: 1.5, from: 8,  to: 18 },
-  guard:      { name: '衛兵',   icon: '🛡️', color: '#5a78c8', shirt: '#3e5ca8', hat: 'helmet', place: 'guard',    wage: 1.2, from: 8,  to: 20 },
-  researcher: { name: '研究者', icon: '🔬', color: '#a070d0', shirt: '#8a5cc0', hat: 'glasses', place: 'lab',     wage: 1.2, from: 9,  to: 18 },
-  merchant:   { name: '商人',   icon: '💰', color: '#d8c040', shirt: '#c8a030', hat: 'cap',    place: 'market',   wage: 1.5, from: 8,  to: 18 },
+  farmer:     { name: '農家',   icon: '🌾', color: '#7fb04a', shirt: '#6f9a3a', hat: 'straw',  place: 'farm',     wage: 3,   from: 8,  to: 17 },
+  cook:       { name: '料理人', icon: '🍳', color: '#e0904a', shirt: '#f0f0f0', hat: 'chef',   place: 'diner',    wage: 3,   from: 9,  to: 19 },
+  smith:      { name: '鍛冶屋', icon: '🔨', color: '#9a7a6a', shirt: '#7a5a46', hat: 'bandana', place: 'workshop', wage: 3.5, from: 8,  to: 17 },
+  doctor:     { name: '医者',   icon: '🩺', color: '#e8e8f0', shirt: '#e8eef6', hat: null,     place: 'clinic',   wage: 4.5, from: 8,  to: 18 },
+  guard:      { name: '衛兵',   icon: '🛡️', color: '#5a78c8', shirt: '#3e5ca8', hat: 'helmet', place: 'guard',    wage: 3.5, from: 8,  to: 20 },
+  researcher: { name: '研究者', icon: '🔬', color: '#a070d0', shirt: '#8a5cc0', hat: 'glasses', place: 'lab',     wage: 3.5, from: 9,  to: 18 },
+  merchant:   { name: '商人',   icon: '💰', color: '#d8c040', shirt: '#c8a030', hat: 'cap',    place: 'market',   wage: 4, from: 8,  to: 18 },
+  mayor:      { name: '村長',   icon: '🏛️', color: '#a05a7a', shirt: '#7a3a5a', hat: null,     place: 'townhall', wage: 3,   from: 8,  to: 18 },
   none:       { name: 'よそ者', icon: '🎒', color: '#ffffff', shirt: '#d9485a', hat: null,     place: null,       wage: 0,   from: 0,  to: 0 },
 };
 
@@ -84,6 +91,11 @@ export const FACILITIES = [
     furn: [[1, 1, 'labbench'], [2, 1, 'labbench'], [3, 1, 'labbench'], [5, 1, 'bookshelf'], [6, 1, 'bookshelf'],
       [4, 3, 'labbench'], [5, 3, 'labbench'], [6, 5, 'plant']],
     spots: { work: [[2, 2], [4, 2], [5, 4], [1, 2]] } },
+  { id: 'townhall', name: '役場', icon: '🏛️', x: 54, y: 15, w: 7, h: 7, door: [57, 21],
+    roof: '#7a2a3a', wall: '#e8dcc8', floor: 'wood',
+    furn: [[1, 1, 'bookshelf'], [2, 1, 'bookshelf'], [5, 1, 'bookshelf'], [3, 2, 'desk'], [3, 4, 'table'], [2, 4, 'chair'], [4, 4, 'chair'],
+      [1, 5, 'plant'], [5, 5, 'plant'], [5, 3, 'chest']],
+    spots: { work: [[3, 1], [4, 2]], customer: [[3, 3], [2, 3]] } },
   house('house1', '東の家', 11, '#9a5a3a'),
   house('house2', '柳の家', 18, '#5a7a40'),
   house('house3', '丘の家', 25, '#8a4040'),
@@ -103,7 +115,7 @@ export const PLAZA_DECOR = [
 
 // 道（[x0,y0,x1,y1] の長方形）
 export const ROADS = [
-  [1, 11, 52, 12], [1, 23, 52, 24], [1, 33, 52, 34],
+  [1, 11, 60, 12], [1, 23, 60, 24], [1, 33, 60, 34],
   [16, 1, 17, 12], [38, 1, 39, 12],
   [10, 12, 10, 34], [19, 12, 20, 24], [32, 12, 33, 24], [42, 12, 42, 24], [52, 11, 52, 34],
 ];
@@ -145,6 +157,10 @@ export const KEY_RESIDENTS = [
     likes: '昼寝と、楽なもうけ話',
     persona: '怠け者でずる賢い若者。働くより楽して稼ぐ方法ばかり考えている。いつか町を牛耳りたい。',
     p: { aggression: 0.6, honesty: 0.1, sociability: 0.6, greed: 0.85 } },
+  { id: 'genji',  name: 'ゲンジ', job: 'mayor',      home: 'house3', key: true, likesItem: 'book', tone: 'polite', hair: 'short',
+    likes: '町の帳簿と、静かな将棋',
+    persona: 'この町の村長をつとめる穏やかな老人。町のまとめ役で、税金と決まりごとにはうるさい。みんなの話をよく聞くが、決めるときは決める。',
+    p: { aggression: 0.15, honesty: 0.8, sociability: 0.75, greed: 0.35 } },
   { id: 'nagi',   name: 'ナギ',   job: 'farmer',     home: 'house1', key: true, likesItem: 'sweets', tone: 'polite', hair: 'short', female: true,
     likes: '甘いお菓子と、姉さんの作るスープ',
     persona: 'ハルの妹で、内気で真面目な農家の女性。人見知りだが、一度心を許すととても義理堅い。カゲのことが少し気になっている。',
@@ -160,10 +176,10 @@ export function makeBackgroundResidents() { return []; }
 // ---- アイテム ----
 // gift: 贈り物として渡せる  price/shop: どこで買えるか
 export const ITEMS = {
-  flower:   { name: '花束', icon: '💐', desc: '贈り物。好きな人に渡すととても喜ばれる。', gift: true, price: 2, shop: 'market' },
-  sweets:   { name: '焼き菓子', icon: '🍪', desc: '贈り物。甘いもの好きに喜ばれる。', gift: true, price: 2, shop: 'market' },
-  book:     { name: '古い本', icon: '📕', desc: '贈り物。物知りや商売人に喜ばれる。', gift: true, price: 4, shop: 'market' },
-  sake:     { name: '酒瓶', icon: '🍶', desc: '贈り物。酒好きに喜ばれる。', gift: true, price: 2, shop: 'tavern' },
+  flower:   { name: '花束', icon: '💐', desc: '贈り物。好きな人に渡すととても喜ばれる。', gift: true, price: 3, shop: 'market' },
+  sweets:   { name: '焼き菓子', icon: '🍪', desc: '贈り物。甘いもの好きに喜ばれる。', gift: true, price: 3, shop: 'market' },
+  book:     { name: '古い本', icon: '📕', desc: '贈り物。物知りや商売人に喜ばれる。', gift: true, price: 6, shop: 'market' },
+  sake:     { name: '酒瓶', icon: '🍶', desc: '贈り物。酒好きに喜ばれる。', gift: true, price: 4, shop: 'tavern' },
   weapon:   { name: '鉄の棍棒', icon: '🏏', desc: '腕力+8' },
   meteor:   { name: '未知の物質', icon: '💎', desc: '空から落ちてきた光る石。研究所で調べられる。' },
   elixir:   { name: '万能薬', icon: '🧪', desc: '使うと体力が全回復する。' },

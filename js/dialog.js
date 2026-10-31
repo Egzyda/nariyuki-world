@@ -100,6 +100,8 @@ export function parseIntent(text, residents, self) {
     const hr = parseInt(tm[1].replace(/[０-９]/g, (d) => '０１２３４５６７８９'.indexOf(d)));
     return { ...r, kind: 'appoint', hour: hr };
   }
+  if (/(助けて(やる|あげる|あげよう|やろう)|出して(やる|あげる|やろう)|逃がして(やる|あげる)|脱獄|保釈|ここから出)/.test(t)) return { ...r, kind: 'rescue' };
+  if (/(決まり|ルール|禁止|税|配給|見回り|パトロール)/.test(t) && /(しよう|しない|にして|にしよう|したい|やめ|上げ|下げ|増や|減ら|なくそ|提案|作ろう|作って)/.test(t)) return { ...r, kind: 'rule' };
   if (/(通報|つうほう|衛兵に(言|伝|知らせ|話)|詰所に(言|伝|知らせ|行|届)|捕まえて|しょっぴ|突き出)/.test(t)) return { ...r, kind: 'reqReport', ask: q };
   if (/(見張って|みはって|見張り|監視|様子を見て|後をつけ|あとをつけ|目を離さ)/.test(t)) return { ...r, kind: 'reqWatch', ask: q };
   if (/(広めて|ひろめて|言いふらし|みんなに(言|伝|話|知らせ|教え)|噂を流し|うわさを流し)/.test(t)) return { ...r, kind: 'reqSpread', ask: q };

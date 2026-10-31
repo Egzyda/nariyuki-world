@@ -10,6 +10,7 @@ import {
 import { facAt, FAC, walkable, furnAt } from './world.js';
 import * as Sim from './sim.js';
 import { toneOf, firstPerson, placeName } from './dialog.js';
+import * as Town from './town.js';
 
 const LIFE = 60 * 24 * 60;    // 「ずっと」牢屋
 
@@ -85,7 +86,7 @@ export function onCrime(actor, witnesses) {
 export function hourly(h) {
   if (!S.wolf) return;
   if (h === 1) startHunt();
-  if (h === 21) for (const g of residents()) if (g.alive && g.job === 'guard') g.patrolNight = S.wolfKnown && chance(0.6) ? day() : -1;
+  if (h === 21) for (const g of residents()) if (g.alive && g.job === 'guard') g.patrolNight = S.rules?.patrol || (S.wolfKnown && chance(0.6)) ? day() : -1;
   if (h === 0) revealIfJailed();
   if (h >= 9 && h <= 18) { proposeIfSuspicious(); guardsAct(); }
 }
@@ -110,8 +111,9 @@ function chooseVictim(w) {
 
 function startHunt() {
   const w = wolfChar();
-  if (!w || !w.alive || isJailed(w) || w.hunt || day() < 3 || S.holdId === w.id) return;
-  const p = S.wolf.kills.length ? (S.wolf.lieLow ? 0.2 : 0.55) : 0.85;
+  if (!w || !w.alive || isJailed(w) || w.hunt || day() < 2 || S.holdId === w.id) return;
+  if (day() === 2 && !S.wolf.omen) omen();
+  const p = S.wolf.kills.length ? (S.wolf.lieLow ? 0.2 : 0.55) : day() === 2 ? 0.45 : 0.9;
   S.wolf.lieLow = false;
   if (!chance(p)) return;
   // 家の前に見張りがいると、半分くらいは気づいて今夜は諦める
@@ -132,6 +134,16 @@ function startHunt() {
       addSus(o, w.id, 35, '夜中にこっそり家を出ていった');
     }
   }
+}
+
+// 最初の夜：遠吠えの前触れ
+function omen() {
+  S.wolf.omen = true;
+  const p = S.player;
+  if (p.alive && !(p.activity === 'sleep' && p.inBed)) toast('🌙 遠くで、獣の遠吠えのような声が聞こえた……');
+  const ears = residents().filter((o) => o.alive).sort(() => S.rand() - 0.5).slice(0, 2);
+  for (const o of ears) memo(o, '夜中に獣の遠吠えのような声を聞いた', 'night');
+  setTimeout(() => post('町役場', '昨夜、獣の遠吠えのような声を聞いたという話が寄せられています。念のため戸締まりを。', { authorId: 'town' }), 500);
 }
 
 function goHome(w) {
@@ -263,6 +275,7 @@ function discoverBody(v, finder) {
     else say(finder, `${pick(['きゃああ！', 'う、うそだろ……！', 'ひっ……！'])} ${v.name}が……！`, 6);
   }
   const first = S.wolf.kills.length <= 1;
+  Town.onWolfKnown();
   log(`${v.name}が${f ? f.name : '町'}で無残な姿で見つかった。獣の爪のような傷がある……`, 'death');
   post('町役場', `【訃報】${v.name}さんが${f ? f.name : '町'}で亡くなっているのが見つかりました。獣に引き裂かれたような傷があります。${first ? '町では「人狼」のしわざだという噂が広がっています。' : '人狼の犠牲者は' + S.wolf.kills.length + '人になりました。'}`, { authorId: 'town' });
   S.banner = first
@@ -312,7 +325,7 @@ function discoverBody(v, finder) {
   if (leaders[0]) scheduleMeeting(leaders[0].id, 120, 'death');
 }
 
-function leaderScore(o) { return o.p.sociability + o.p.honesty * 0.6 + (o.job === 'guard' ? 0.4 : 0) + S.rand() * 0.3; }
+function leaderScore(o) { return o.p.sociability + o.p.honesty * 0.6 + (o.job === 'guard' ? 0.4 : 0) + (o.job === 'mayor' ? 1.5 : 0) + S.rand() * 0.3; }
 
 export function investigate(fid) {
   const c = S.clues[fid];
@@ -343,6 +356,7 @@ export function reveal(how) {
     addLike(o, w, -100);
     if (S.wolf.playerAccused.has(w.id)) addLike(o, S.player, 20);
   }
+  if (S.wolf.playerAccused.has(w.id)) Town.payBounty();
   w.jailedUntil = S.t + LIFE;
   // 疑われて牢屋にいた人は釈放
   for (const o of [...residents(), S.player]) {
@@ -406,17 +420,29 @@ const RING = [[24, 16], [25, 16], [26, 16], [27, 16], [23, 17], [28, 17], [23, 1
 
 export function meetingActive() { return S.meeting && S.meeting.state !== 'done'; }
 
-export function scheduleMeeting(orgId, delayMin, reason) {
-  if (meetingActive()) return S.meeting;
+export function scheduleMeeting(orgId, delayMin, reason, rule = null) {
+  if (meetingActive()) {
+    if (rule && !S.meeting.agenda.some((a) => a.rule.key === rule.key)) {
+      S.meeting.agenda.push({ rule, proposer: orgId });
+      addNote(`次の話し合いの議題に「${Town.describe(rule)}」が加わった`);
+    }
+    return S.meeting;
+  }
   let at = S.t + delayMin;
   const tod = at % 1440;
   if (tod < 8 * 60) at += 8 * 60 - tod;
   else if (tod > 20 * 60) at += 24 * 60 - tod + 8 * 60;
   const org = orgId === 'player' ? S.player : byId(orgId);
-  S.meeting = { at, org: orgId, reason, state: 'planned', present: [], queue: [], log: [], nextReal: 0, playerIn: false, votes: null, result: null };
+  S.meeting = { at, org: orgId, reason, state: 'planned', present: [], queue: [], log: [], nextReal: 0, playerIn: false, votes: null, result: null, agenda: [] };
+  if (rule) S.meeting.agenda.push({ rule, proposer: orgId });
+  // 人狼の事件のあと、村長は夜間外出禁止を議題にする
+  const may = Town.mayor();
+  if (reason === 'death' && may && !S.rules.curfew) S.meeting.agenda.push({ rule: { key: 'curfew', value: true }, proposer: may.id });
+  else if (reason === 'death' && may && !S.rules.patrol && S.wolf.kills.length >= 2) S.meeting.agenda.push({ rule: { key: 'patrol', value: true }, proposer: may.id });
   const hh = Math.floor((at % 1440) / 60);
   const dayWord = Math.floor(at / 1440) + 1 === day() ? '今日' : '明日';
-  const why = reason === 'death' ? '人狼のことを話し合いたい。' : reason === 'suspect' ? '人狼が誰なのか、みんなで話し合おう。' : '話し合いたいことがある。';
+  const why = (reason === 'death' ? '人狼のことを話し合いたい。' : reason === 'suspect' ? '人狼が誰なのか、みんなで話し合おう。' : '話し合いたいことがある。')
+    + (S.meeting.agenda.length ? `議題：${S.meeting.agenda.map((a) => Town.describe(a.rule)).join('、')}` : '');
   post(org.isPlayer ? 'あなた' : org.name, `【呼びかけ】${dayWord}${hh}時、広場の噴水の前に集まってほしい。${why}`, { authorId: orgId });
   log(`${dn(org)}が${dayWord}${hh}時に広場での話し合いを呼びかけた。`, 'event');
   toast(`📣 ${org.isPlayer ? 'あなた' : org.name}の呼びかけで、${dayWord}${hh}時に広場で話し合いが開かれる`);
@@ -457,17 +483,23 @@ function meetingTick() {
     m.playerIn = inPlaza(S.player) && S.player.alive && !isJailed(S.player);
     m.state = 'talking';
     buildQueue(m, present);
-    if (!m.playerIn) { while (m.queue.length) speakNext(m); vote(null); }
+    if (!m.playerIn) { while (m.queue.length) speakNext(m); finishTalk(m); }
     else { S.meetingPause = true; m.nextReal = performance.now() + 800; }
   }
   if (m.state === 'talking' && m.playerIn && performance.now() >= m.nextReal) {
     if (m.queue.length) { const line = speakNext(m); m.nextReal = performance.now() + 1600 + (line?.length || 10) * 45; }
+    else if (!S.wolfKnown) finishTalk(m);
     else {
       m.state = 'voting';
       const org = presentChars(m)[0];
       addLine(m, org, pol(org) ? 'そろそろ決めましょう。誰を牢屋に入れるか、投票です。' : 'そろそろ決めよう。誰を牢屋に入れるか、投票だ。');
     }
   }
+}
+
+function finishTalk(m) {
+  if (S.wolfKnown) vote(null);
+  else endMeeting('話し合いが終わった。');
 }
 
 function presentChars(m) {
@@ -487,6 +519,8 @@ function buildQueue(m, present) {
   const opener = list[0];
   const victims = S.wolf.kills.map((k) => byId(k.id)?.name).filter(Boolean);
   m.queue.push({ type: 'open', c: opener, victims });
+  for (const a of m.agenda) m.queue.push({ type: 'rule', rule: a.rule, proposer: a.proposer, c: byId(a.proposer) && list.includes(byId(a.proposer)) ? byId(a.proposer) : opener });
+  if (!S.wolfKnown) return;
   const order = list.slice(1).sort(() => S.rand() - 0.5);
   for (const c of [opener, ...order]) m.queue.push({ type: 'say', c });
 }
@@ -535,6 +569,28 @@ function speakNext(m) {
     } else text = pick([`ち、違う！ ${firstPerson(c)}は人狼なんかじゃない！`, `${firstPerson(c)}じゃない！ 信じてくれ！`, 'ひどい……私じゃないのに。']);
   } else if (item.type === 'react') {
     text = item.text;
+  } else if (item.type === 'rule') {
+    const d = Town.describe(item.rule);
+    text = item.proposer === 'player' ? `よそ者から「${d}」という提案があった。みんな、どう思う？`
+      : pol(c) ? `ひとつ提案があります。「${d}」にしたいと思います。賛成か反対か、聞かせてください。` : `提案がある。「${d}」にしたいと思う。賛成か反対か、聞かせてくれ。`;
+    m.queue.unshift({ type: 'ruleVote', rule: item.rule, proposer: item.proposer, c });
+  } else if (item.type === 'ruleVote') {
+    const yes = [], no = [];
+    for (const id of m.present) {
+      const o = byId(id);
+      if (!o || !o.alive) continue;
+      (o.id === item.proposer || Town.support(o, item.rule, item.proposer) >= 0.5 ? yes : no).push(o.name);
+    }
+    if (item.proposer === 'player' && m.playerIn) yes.push('あなた');
+    const d = Town.describe(item.rule);
+    m.log.push({ who: '', text: `賛成：${yes.join('、') || 'なし'}／反対：${no.join('、') || 'なし'}`, cls: 'vote' });
+    if (yes.length > no.length) {
+      Town.applyRule(item.rule);
+      text = `賛成${yes.length}・反対${no.length}で、「${d}」に決まった。`;
+    } else text = `賛成${yes.length}・反対${no.length}で、「${d}」は見送りになった。`;
+    m.log.push({ who: '', text, cls: 'result' });
+    m.agenda = m.agenda.filter((a) => a.rule.key !== item.rule.key);
+    return text;
   }
   if (text) addLine(m, c, text);
   return text;
@@ -546,8 +602,15 @@ export function playerSpeak(text) {
   if (!m || !['talking', 'voting'].includes(m.state)) return;
   m.log.push({ who: 'あなた', text, cls: 'me' });
   const t = text.replace(/\s+/g, '');
+  const rule = Town.parseRule(text);
+  if (rule) {
+    if (m.state === 'voting') m.state = 'talking';
+    m.queue.unshift({ type: 'ruleVote', rule, proposer: 'player', c: presentChars(m)[0] });
+    m.nextReal = Math.min(m.nextReal, performance.now() + 900);
+    return;
+  }
   const target = [...residents(), S.player].find((o) => o !== S.player && t.includes(o.name));
-  if (/(投票|決めよう|決めましょう)/.test(t)) { m.queue.length = 0; m.nextReal = 0; return; }
+  if (/(投票|決めよう|決めましょう)/.test(t)) { m.queue = keepRuleItems(m.queue); m.nextReal = 0; return; }
   if (!target) {
     const c = byId(m.present[Math.floor(S.rand() * m.present.length)]);
     if (c) m.queue.unshift({ type: 'react', c, text: pol(c) ? 'ええと……誰のことを言っているんですか？' : 'で、誰のことを言ってるんだ？' });
@@ -583,10 +646,14 @@ export function playerSpeak(text) {
   void agree; void total;
 }
 
+const keepRuleItems = (q) => q.filter((i) => i.type === 'rule' || i.type === 'ruleVote');
+
 export function startVoteNow() {
   const m = S.meeting;
   if (!m || m.state !== 'talking') return;
-  m.queue.length = 0;
+  // 決まりの採決が残っていれば先に済ませる
+  m.queue = keepRuleItems(m.queue);
+  if (m.queue.length) { m.nextReal = 0; return; }
   m.state = 'voting';
   const org = presentChars(m)[0];
   if (org) addLine(m, org, pol(org) ? 'では、投票で決めましょう。' : 'よし、投票で決めよう。');
@@ -662,7 +729,7 @@ export function leaveMeeting() {
   m.playerIn = false;
   S.meetingPause = false;
   if (m.state === 'talking') while (m.queue.length) speakNext(m);
-  vote(null);
+  finishTalk(m);
 }
 
 // ================= 会話用 =================

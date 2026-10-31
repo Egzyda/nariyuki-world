@@ -6,6 +6,7 @@ import { S, day, timeStr, rel, residents, distTiles, isJailed, clamp, toast, log
 import * as Sim from './sim.js';
 import * as Brain from './brain.js';
 import * as Wolf from './wolf.js';
+import * as Town from './town.js';
 import { draw, view, resetRenderCache } from './render.js';
 
 const $ = (s) => document.querySelector(s);
@@ -190,7 +191,8 @@ function currentFacility() { const [x, y] = playerTile(); return facAt(x, y); }
 
 function nearestThing() {
   const p = S.player;
-  const chars = S.chars.filter((c) => c !== p && c.alive && !isJailed(c) && distTiles(p, c) <= 1.6 && Sim.canSee(p, c))
+  const inGuard = currentFacility()?.id === 'guard';
+  const chars = S.chars.filter((c) => c !== p && c.alive && (isJailed(c) ? inGuard && distTiles(p, c) <= 2.7 : distTiles(p, c) <= 1.6) && Sim.canSee(p, c))
     .sort((a, b) => distTiles(p, a) - distTiles(p, b));
   if (chars.length) return { type: 'char', target: chars[0] };
   const m = S.meteor;
@@ -434,7 +436,7 @@ function setSpeed(v) {
 }
 
 $('#post-text').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#post-btn').click(); }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#post-btn').click(); $('#post-text').blur(); }
 });
 $('#post-btn').onclick = () => {
   const text = $('#post-text').value.trim();
@@ -517,6 +519,12 @@ function renderStatus() {
       事件：${S.stats.crimes}件 ／ 死者：${S.stats.deaths}人 ／ 逮捕：${S.stats.arrests}件
       ${S.meteor ? `<br>光る石：${S.meteor.state === 'ground' ? '地面に落ちている' : S.meteor.state === 'done' ? ITEMS[S.meteor.result].name + 'だった' : '誰かが持っている'}` : ''}
     </div>
+    <div class="box"><h4>🏛️ 町の決まり</h4>
+      ${Town.rulesText().join('／')}<br>
+      町の金庫：${Math.floor(S.treasury)}G${S.bounty ? `　人狼の懸賞金：${S.bounty}G` : ''}
+      ${S.taxDebt.player ? `<br><span class="wanted">税金の滞納：${S.taxDebt.player}G（役場で払える）</span>` : ''}
+      ${Wolf.meetingActive() ? `<br>📣 ${Math.floor((S.meeting.at % 1440) / 60)}時から広場で話し合い${S.meeting.agenda.length ? `（議題：${S.meeting.agenda.map((a) => Town.describe(a.rule)).join('、')}）` : ''}` : ''}
+    </div>
     `;
   const ub = $('#tab-status [data-use]');
   if (ub) ub.onclick = () => Sim.useItem(S.player, ub.dataset.use);
@@ -550,7 +558,7 @@ function renderPeople() {
   const list = residents().slice().sort((a, b) => (b.alive - a.alive) || (b.key - a.key));
   $('#tab-people').innerHTML = list.map((c) => {
     const r = rel(c, p);
-    const st = c.undiscovered ? '' : !c.alive ? (c.killedBy ? '🐺🪦' : '🪦') : c.jailedAsWolf ? '🔒人狼の疑い' : isJailed(c) ? '🔒' : S.wanted.has(c.id) ? '🚨' : c.companion ? '🤝' : c.activity === 'sleep' ? '💤' : '';
+    const st = c.undiscovered ? '' : !c.alive ? (c.killedBy ? '🐺🪦' : '🪦') : isJailed(c) ? `🔒${Sim.jailText(c)}` : S.wanted.has(c.id) ? '🚨' : c.companion ? '🤝' : c.activity === 'sleep' ? '💤' : '';
     const likeW = Math.abs(r.like);
     const detail = expanded === c.id ? `<div class="detail">
       ${c.persona ? esc(c.persona) + '<br>' : ''}
@@ -596,7 +604,7 @@ function updateNearCard(n) {
   const html = `<b>${esc(c.name)}</b> <small>${JOBS[c.job].icon}${JOBS[c.job].name}</small>
     <div class="row"><span>好感</span>${meter(Math.abs(r.like), 100, likeCol)}<span>${Math.round(r.like)}（${feel}）</span></div>
     <div class="row"><span>恐怖</span>${meter(r.fear, 100, '#a070d0')}<span>${Math.round(r.fear)}</span></div>
-    <div>いま：${esc(Brain.actText(c))}</div>
+    <div>いま：${isJailed(c) ? `🔒 牢屋の中（${Sim.jailText(c)}）` : esc(Brain.actText(c))}</div>
     ${c.likesItem ? `<div>好物：${ITEMS[c.likesItem].icon}${ITEMS[c.likesItem].name}</div>` : ''}
     ${c.quest ? `<div>📝 頼まれごと：${esc(c.quest.label)}を届ける</div>` : ''}
     ${c.companion ? '<div>🤝 あなたと同行中</div>' : ''}`;

@@ -7,6 +7,7 @@ import { ITEMS, JOBS, TILE, PLAZA, MEAL_COST, DRINK_COST } from './data.js';
 import { facAt } from './world.js';
 import * as Dlg from './dialog.js';
 import * as Wolf from './wolf.js';
+import * as Town from './town.js';
 
 const STANCES = ['peaceful', 'work', 'scheme', 'aggressive'];
 const rnd = Math.random;
@@ -149,8 +150,8 @@ function memoryAbout(c, target) {
 export function bribeWorks(t, n) {
   if (t.job !== 'guard' || !S.wanted.has('player')) return false;
   const like = rel(t, 'player').like;
-  if (t.p.greed > 0.6) return n >= 2 || (n >= 1 && like > 20);
-  return t.p.honesty < 0.7 && n >= 8;
+  if (t.p.greed > 0.6) return n >= 4 || (n >= 2 && like > 20);
+  return t.p.honesty < 0.7 && n >= 15;
 }
 
 // 渡したときの反応（giveToNpc の結果から）
@@ -290,6 +291,7 @@ export function togetherLine(c, dest) {
 export function inviteDecision(c, place, treat) {
   const r = rel(c, 'player');
   const h = hour();
+  if (c.jailedUntil > S.t) return 'jailed';
   if (h >= 22 || h < 6) return 'late';
   if (c.companion) return 'already';
   if (r.fear >= 55) return 'fear';
@@ -340,6 +342,7 @@ function respond(c, it, raw) {
         if (treat) c.companion.treat = true;
         res.say = ln('already'); break;
       case 'late': res.say = ln('sleepy'); break;
+      case 'jailed': res.say = Dlg.lineN(c, ['見ての通り、牢屋の中なんだ……行けるわけないよ。', 'ご覧のとおり牢屋の中です……行けません。']); break;
       case 'full': res.say = ln('invite_full'); break;
       case 'busy': res.say = ln('invite_busy', { until: JOBS[c.job].to }); break;
       case 'nomoney': res.say = ln('invite_nomoney'); c.pending = { type: 'invite', place, t: S.t }; break;
@@ -394,6 +397,11 @@ function respond(c, it, raw) {
       break;
     case 'yes':
       if (pend?.type === 'invite') { doInvite(pend.place, true); break; }
+      if (pend?.type === 'deal') {
+        res.deal = pend.deal;
+        res.say = Dlg.lineN(c, ['頼んだぞ……！ 保釈金を払うか、隙を見て鍵を開けてくれ。', 'お願いします……！ 保釈金を払うか、鍵を開けてください。']);
+        break;
+      }
       if (pend?.type === 'task') {
         res.task = pend.task;
         res.say = taskAcceptLine(c, pend.task);
@@ -484,6 +492,43 @@ function respond(c, it, raw) {
       res.appointment = { place: it.place, at };
       res.say = Dlg.lineN(c, [`いいよ、${tomorrow ? '明日の' : ''}${h}時に${pn}ね。待ってる！`, `わかりました。${tomorrow ? '明日の' : ''}${h}時に${pn}で。お待ちしています。`]);
       res.like = gainLike(c, 2);
+      break;
+    }
+    case 'rescue': {
+      if (!(c.jailedUntil > S.t)) { res.say = Dlg.lineN(c, ['助ける？ 何から？', '助ける……ですか？ 何からでしょう？']); break; }
+      if (like < -30) { res.say = Dlg.lineN(c, ['あんたの助けなんかいらない。', 'あなたの助けは結構です。']); break; }
+      const coins = Math.min(Math.floor(c.coins), 12);
+      let info;
+      if (c.isWolf) { const f = S.chars.find((x) => x.id === S.wolf.frame); info = f ? `${f.name}が夜中に出歩いているのを見たことがある` : '何も知らない'; }
+      else {
+        const night = Wolf.nightTestimony(c);
+        const top = Wolf.suspectLine(c);
+        const known = culpritFromMemory(c);
+        info = night ? night.text : top ? `${top.t.isPlayer ? 'あんた' : top.t.name}が怪しいと思っている。${top.why}から` : known ? known.text : pick([
+          'バンは4Gも渡せば、手配されていても見逃してくれる',
+          '市場の奥の棚は見張りが手薄で、品物をくすねやすい',
+          `役場の金庫には${Math.floor(S.treasury)}Gも貯まっている`,
+          'ツヅミは裏で帳簿をごまかしているらしい',
+        ]);
+      }
+      res.say = Dlg.lineN(c, [`本当か！？ ここから出してくれたら、${coins ? coins + 'Gやる。それに' : 'お金はないけど'}……誰にも言ってないことを教えるよ。`,
+        `本当ですか！？ 出していただけたら、${coins ? coins + 'Gお支払いします。それと' : 'お金はありませんが'}……誰にも話していないことをお教えします。`]);
+      c.pending = { type: 'deal', deal: { coins, info }, t: S.t };
+      res.note = `${c.name}（牢屋）：出してくれたら${coins}Gと秘密の情報を渡すと言っている`;
+      break;
+    }
+    case 'rule': {
+      const rule = Town.parseRule(raw);
+      if (!rule) { res.say = Dlg.lineN(c, ['それならもう決まってるよ。', 'それはもう決まっていますよ。']); break; }
+      const d = Town.describe(rule);
+      if (c.job === 'mayor') {
+        res.say = Dlg.lineN(c, [`「${d}」か……わかった、次の話し合いでみんなに諮ろう。`, `「${d}」ですか……わかりました。次の話し合いで皆さんに諮りましょう。`]);
+        res.rule = rule;
+      } else {
+        const sp = Town.support(c, rule, 'player');
+        res.say = Dlg.lineN(c, [`「${d}」？ ${sp >= 0.5 ? '{I}は賛成だな。' : '{I}は反対だな。'}決まりを変えたいなら、村長のゲンジさんに話すか、広場の話し合いで提案してみたら？`,
+          `「${d}」ですか。${sp >= 0.5 ? '私は賛成です。' : '私は反対です。'}決まりを変えるなら、村長のゲンジさんに相談するか、話し合いで提案してみてください。`]);
+      }
       break;
     }
     case 'wolfWho': {
@@ -591,7 +636,7 @@ function respond(c, it, raw) {
       const p = S.player;
       const job = JOBS[c.job];
       if (p.job === c.job) { res.say = ln('hireAlready', { job: job.name }); break; }
-      if (!job?.place) { res.say = ln('hireNo'); break; }
+      if (!job?.place || c.job === 'mayor') { res.say = ln('hireNo'); break; }
       if (like < -10) { res.say = ln('hireCold'); break; }
       res.say = ln('hireOk', { job: job.name, place: Dlg.placeName(job.place) }); res.hire = true;
       break;
