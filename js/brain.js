@@ -2,7 +2,7 @@
 // 会話は「意味の読み取り(dialog.js) → ゲームとしての判断 → セリフ」の順で作る。
 // AIが使えるときは、判断した内容をAIにキャラクターの口調で言い換えてもらう（判断はブレない）。
 import { LLM } from './llm.js';
-import { S, day, hour, timeStr, rel, pick, chance, jobName, post, clamp, residents } from './state.js';
+import { S, day, hour, timeStr, rel, pick, chance, jobName, post, clamp, residents, recentEvents } from './state.js';
 import { ITEMS, JOBS, TILE, PLAZA, MEAL_COST, DRINK_COST } from './data.js';
 import { facAt } from './world.js';
 import * as Dlg from './dialog.js';
@@ -128,6 +128,63 @@ function memoryAbout(c, target) {
   return m ? m.replace(/^\d+日目 /, '') : null;
 }
 
+// 賄賂が通じるか（手配中のプレイヤーが衛兵にお金を渡したとき）
+export function bribeWorks(t, n) {
+  if (t.job !== 'guard' || !S.wanted.has('player')) return false;
+  const like = rel(t, 'player').like;
+  if (t.p.greed > 0.6) return n >= 2 || (n >= 1 && like > 20);
+  return t.p.honesty < 0.7 && n >= 8;
+}
+
+// 渡したときの反応（giveToNpc の結果から）
+export function giftLine(c, g) {
+  const ln = (k, v) => Dlg.line(c, k, v, rnd);
+  const item = g.label;
+  switch (g.react) {
+    case 'love': return ln('giftLove', { item });
+    case 'hungry': return ln('giftHungry');
+    case 'big': return ln('giftBig', { item });
+    case 'bribe': return ln('giftBribe');
+    case 'suspicious': return ln('giftSuspicious');
+    case 'cursed': return ln('giftCursed');
+    case 'none': return ln('giftNone');
+    default: return ln('giftGood', { item });
+  }
+}
+
+// 渡す前に反応を予想する（会話の返事を先に作るため）
+function previewGift(c, g) {
+  const p = S.player;
+  if (g.coins) {
+    const n = Math.min(g.coins, Math.floor(p.coins));
+    if (n <= 0) return { react: 'none' };
+    if (bribeWorks(c, n)) return { react: 'bribe', label: `${n}G` };
+    if (rel(c, p).like < -20) return { react: 'suspicious', label: `${n}G` };
+    return { react: n >= 5 ? 'big' : 'good', label: `${n}G` };
+  }
+  if (g.item === 'food') {
+    if (p.food < 1) return { react: 'none' };
+    return { react: c.hunger < 40 ? 'hungry' : rel(c, p).like < -20 ? 'suspicious' : 'good', label: '食べ物' };
+  }
+  if (!p.items.includes(g.item)) return { react: 'none' };
+  const label = ITEMS[g.item].name;
+  if (g.item === c.likesItem) return { react: 'love', label };
+  if (g.item === 'cursed') return { react: 'cursed', label };
+  return { react: rel(c, p).like < -20 ? 'suspicious' : 'good', label };
+}
+
+// 「何があったの？」に答えるための、最近の出来事の言い換え
+function tellEvent(c) {
+  const ev = recentEvents(c, 10, ['crime'])[0] || recentEvents(c, 10, ['gift'])[0];
+  if (!ev) return null;
+  const t = ev.text;
+  const m = t.match(/^(.+?)に(盗まれた|殴られた|脅された|捕まった)$/);
+  if (m) return { key: m[1] === 'よそ者' ? 'whVictimPlayer' : 'whVictim', vars: { actor: m[1], what: m[2] } };
+  if (/^よそ者が.+のを見た$/.test(t)) return { key: 'whSawPlayer', vars: { event: t.replace(/^よそ者が/, '').replace(/のを見た$/, '') } };
+  if (/のを見た$/.test(t)) return { key: 'whWitness', vars: { event: t } };
+  return { key: 'whOther', vars: { event: t.replace(/^よそ者から/, 'あんたから') } };
+}
+
 export function inviteDecision(c, place, treat) {
   const r = rel(c, 'player');
   const h = hour();
@@ -139,6 +196,7 @@ export function inviteDecision(c, place, treat) {
   const working = c.activity === 'work' && S.t < c.busyUntil;
   let score = 0.15 + r.like / 90 + c.p.sociability * 0.35;
   if (c.metPlayer) score += 0.08;
+  score += Math.min(0.4, (c.favor || 0) * 0.08);
   if (place === 'diner') {
     if (c.hunger > 85 && !treat) return 'full';
     if (c.hunger < 65) score += 0.35;
@@ -191,8 +249,17 @@ function respond(c, it, raw) {
       res.say = ln(key);
       if (!c.metPlayer && key !== 'greet_cold') { res.say += ln('intro', { job: jobName(c) }); c.metPlayer = true; }
       res.like = gainLike(c, 1);
+      if (c.lastGift && S.t - c.lastGift.t < 8 * 60 && key !== 'greet_cold') res.say += ln('thanksGift', { gift: c.lastGift.label });
+      else {
+        const ev = recentEvents(c, 3, ['crime'])[0];
+        if (ev && !ev.text.includes('よそ者')) res.say += ln('news', { event: 'さっき' + ev.text });
+      }
+      if (c.hunger < 35 && like >= -10 && !c.pending) {
+        res.say += ln('askFoodPlayer');
+        c.pending = { type: 'wantFood', t: S.t };
+      }
       const h = hour();
-      if (like >= 15 && c.hunger < 60 && c.coins >= MEAL_COST && !c.companion && ((h >= 11 && h <= 13) || (h >= 18 && h <= 20))) {
+      if (!c.pending && like >= 15 && c.hunger < 60 && c.coins >= MEAL_COST && !c.companion && ((h >= 11 && h <= 13) || (h >= 18 && h <= 20))) {
         res.say += ln('npcInvite', { place: '食堂' });
         c.pending = { type: 'npcInvite', place: 'diner', t: S.t };
       }
@@ -221,6 +288,12 @@ function respond(c, it, raw) {
       break;
     case 'yes':
       if (pend?.type === 'invite') { doInvite(pend.place, true); break; }
+      if (pend?.type === 'wantFood') {
+        const g = previewGift(c, { item: 'food' });
+        res.say = giftLine(c, g);
+        if (g.react !== 'none') res.gift = { item: 'food' };
+        break;
+      }
       if (pend?.type === 'npcInvite' || pend?.type === 'guide') {
         res.guide = { place: pend.place };
         res.say = pend.type === 'guide' ? ln('guideGo') : ln('invite_ok', { place: Dlg.placeName(pend.place) });
@@ -238,6 +311,55 @@ function respond(c, it, raw) {
       if (c.companion) { res.say = ln('dismiss'); res.dismiss = true; } else { res.say = ln('dismissNone'); }
       break;
     case 'thanks': res.say = ln('thanks'); res.like = gainLike(c, 2); break;
+    case 'gift': {
+      const g = { coins: it.coins, item: it.item };
+      const pv = previewGift(c, g);
+      res.say = giftLine(c, pv);
+      if (pv.react !== 'none') {
+        res.gift = g;
+        // 「〇Gあげるから一緒に来て」のような頼みごと
+        if (it.then) {
+          const before = c.favor || 0;
+          c.favor = before + 2.5;
+          const sub = respond(c, it.then, raw);
+          c.favor = before;
+          res.say += sub.say;
+          for (const k of ['follow', 'guide', 'action', 'amount', 'belief', 'hire']) if (sub[k] && sub[k] !== 'none') res[k] = sub[k];
+        }
+      }
+      break;
+    }
+    case 'whatHappened': {
+      const e = tellEvent(c);
+      if (e) { res.say = ln(e.key, e.vars); if (e.key === 'whVictimPlayer') res.like = -2; }
+      else res.say = ln('whNothing');
+      break;
+    }
+    case 'buyFood': {
+      const price = c.job === 'merchant' ? 3 : 2;
+      if (c.food < 1) { res.say = ln('sellNoFood'); break; }
+      if (like < -15) { res.say = ln('refuse'); break; }
+      if (S.player.coins < price) { res.say = ln('sellNoMoney', { price }); break; }
+      res.say = ln('sellOk', { price }); res.sell = { item: 'food', price };
+      break;
+    }
+    case 'buyItem': {
+      const item = ITEMS[it.item];
+      if (c.job !== 'merchant' || !item?.gift) { res.say = ln('sellItemNo', { item: item?.name || 'それ' }); break; }
+      const price = item.price + 1;
+      if (S.player.coins < price) { res.say = ln('sellNoMoney', { price }); break; }
+      res.say = ln('sellItemOk', { item: item.name, price }); res.sell = { item: it.item, price };
+      break;
+    }
+    case 'hireMe': {
+      const p = S.player;
+      const job = JOBS[c.job];
+      if (p.job === c.job) { res.say = ln('hireAlready', { job: job.name }); break; }
+      if (!job?.place) { res.say = ln('hireNo'); break; }
+      if (like < -10) { res.say = ln('hireCold'); break; }
+      res.say = ln('hireOk', { job: job.name, place: Dlg.placeName(job.place) }); res.hire = true;
+      break;
+    }
     case 'invite': doInvite(it.place, it.treat); break;
     case 'secret':
       if (c.job === 'guard' && c.p.greed > 0.6) res.say = ln('secretBribe');
@@ -325,7 +447,7 @@ function respond(c, it, raw) {
     }
     case 'likes': res.say = ln('likes', { likes: c.likes || 'のんびりすること' }); break;
     case 'rumor': {
-      const mem = c.memory.filter((m) => !m.includes('よそ者') && /(見た|された|亡くな|捕ま|拾った)/.test(m));
+      const mem = c.memory.filter((m) => !m.includes('よそ者') && /(見た|された|盗まれた|殴られた|脅された|亡くな|捕ま|拾った)/.test(m));
       if (mem.length) res.say = ln('rumor', { memory: pick(mem).replace(/^\d+日目 /, '') });
       else if (S.foodStock < 15) res.say = ln('rumorFood');
       else res.say = ln('rumorNone');

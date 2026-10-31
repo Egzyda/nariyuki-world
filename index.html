@@ -46,15 +46,18 @@
     <div id="menu" hidden></div>
     <div id="busy" hidden></div>
     <div id="hint"></div>
+    <div id="banner" hidden></div>
   </div>
   <aside id="side">
     <nav id="tabs">
       <button data-tab="status" class="on">状態</button>
+      <button data-tab="items">持ち物</button>
       <button data-tab="people">住民</button>
       <button data-tab="board">掲示板 <span id="board-new"></span></button>
       <button data-tab="log">記録</button>
     </nav>
     <section id="tab-status" class="tab on"></section>
+    <section id="tab-items" class="tab"></section>
     <section id="tab-people" class="tab"></section>
     <section id="tab-board" class="tab">
       <div class="post-form">
@@ -79,6 +82,7 @@
     <div class="chat-head"><span id="chat-name"></span><span id="chat-rel"></span><button id="chat-close">✕</button></div>
     <div id="chat-log"></div>
     <div id="chat-chips"></div>
+    <div id="chat-trade"></div>
     <div class="chat-input">
       <input id="chat-text" maxlength="80" placeholder="なんでも話しかけてみよう（嘘も交渉も自由）" autocomplete="off">
       <button id="chat-send">送る</button>

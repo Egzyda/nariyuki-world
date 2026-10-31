@@ -89,7 +89,8 @@ export const FACILITIES = [
   house('house3', '丘の家', 25, '#8a4040'),
   house('house4', '井戸の家', 32, '#405a7a'),
   house('house5', '石の家', 39, '#6a6a6a'),
-  { ...house('house6', '空き家', 46, '#5a4a3a'), icon: '🏚️' },
+  { ...house('house6', 'あなたの家', 46, '#c0503a'), icon: '🏡', mine: true,
+    furn: [[1, 1, 'bed'], [1, 2, 'bed'], [4, 1, 'chest'], [4, 2, 'plant'], [2, 2, 'table'], [3, 2, 'table'], [2, 3, 'chair'], [3, 3, 'chair'], [2, 1, 'shelf'], [3, 1, 'plant']] },
 ];
 
 export const PLAZA = { x: 21, y: 14, w: 11, h: 8 };
@@ -112,68 +113,57 @@ export const ROADS = [
 // p: aggression(攻撃性) honesty(誠実さ) sociability(社交性) greed(欲深さ) 0〜1
 // tone: 口調（dialog.js）  hair: 髪型  likes: 好きなもの
 export const KEY_RESIDENTS = [
-  { id: 'haru',   name: 'ハル',   job: 'farmer',     home: 'house1', key: true, tone: 'cheerful', hair: 'long', female: true,
+  { id: 'haru',   name: 'ハル',   job: 'farmer',     home: 'house1', key: true, likesItem: 'flower', tone: 'cheerful', hair: 'long', female: true,
     likes: '噂話と、採れたての野菜',
     persona: '陽気で世話焼きな農家の女性。噂話が大好きで、困っている人を放っておけない。',
     p: { aggression: 0.1, honesty: 0.8, sociability: 0.95, greed: 0.25 } },
-  { id: 'gou',    name: 'ゴウ',   job: 'smith',      home: 'house2', key: true, tone: 'rough', hair: 'spiky',
+  { id: 'gou',    name: 'ゴウ',   job: 'smith',      home: 'house2', key: true, likesItem: 'sake', tone: 'rough', hair: 'spiky',
     likes: '強い酒と、いい鉄',
     persona: '短気で腕っぷしの強い鍛冶屋の男。義理堅いが、なめられるのが大嫌い。',
     p: { aggression: 0.8, honesty: 0.65, sociability: 0.4, greed: 0.4 } },
-  { id: 'mina',   name: 'ミナ',   job: 'doctor',     home: 'house1', key: true, tone: 'polite', hair: 'long', female: true,
+  { id: 'mina',   name: 'ミナ',   job: 'doctor',     home: 'house4', key: true, likesItem: 'sweets', tone: 'polite', hair: 'long', female: true,
     likes: '静かな朝と、温かいお茶',
     persona: '冷静で正義感の強い町医者の女性。暴力を憎み、町の秩序を何より大事にする。',
     p: { aggression: 0.05, honesty: 0.95, sociability: 0.6, greed: 0.15 } },
-  { id: 'tsuzumi', name: 'ツヅミ', job: 'merchant',  home: 'house3', key: true, tone: 'sly', hair: 'short',
+  { id: 'tsuzumi', name: 'ツヅミ', job: 'merchant',  home: 'house3', key: true, likesItem: 'book', tone: 'sly', hair: 'short',
     likes: 'もうけ話と、金貨の音',
     persona: '計算高い商人の男。にこやかだが嘘も方便と考えていて、得になるなら平気で話を盛る。',
     p: { aggression: 0.3, honesty: 0.2, sociability: 0.8, greed: 0.9 } },
-  { id: 'ban',    name: 'バン',   job: 'guard',      home: 'house4', key: true, tone: 'stern', hair: 'short',
+  { id: 'ban',    name: 'バン',   job: 'guard',      home: 'house4', key: true, likesItem: 'sake', tone: 'stern', hair: 'short',
     likes: '規律と……まあ、ちょっとした心づけ',
     persona: '規律を口にする衛兵の男。ただし金にはめっぽう弱く、袖の下には目をつぶりがち。',
     p: { aggression: 0.5, honesty: 0.4, sociability: 0.5, greed: 0.75 } },
-  { id: 'shion',  name: 'シオン', job: 'researcher', home: 'house5', key: true, tone: 'curious', hair: 'long', female: true,
+  { id: 'shion',  name: 'シオン', job: 'researcher', home: 'house5', key: true, likesItem: 'book', tone: 'curious', hair: 'long', female: true,
     likes: '未知のものと、分厚い本',
     persona: '好奇心のかたまりの研究者の女性。未知のものを調べるためなら倫理は二の次。',
     p: { aggression: 0.35, honesty: 0.5, sociability: 0.35, greed: 0.45 } },
-  { id: 'yoru',   name: 'ヨル',   job: 'cook',       home: 'house3', key: true, tone: 'quiet', hair: 'short',
+  { id: 'yoru',   name: 'ヨル',   job: 'cook',       home: 'house3', key: true, likesItem: 'flower', tone: 'quiet', hair: 'short',
     likes: '煮込み料理と、静かな夜',
     persona: '物静かな食堂の料理人の男。口数は少ないが、受けた恩も恨みも決して忘れない。',
     p: { aggression: 0.5, honesty: 0.75, sociability: 0.3, greed: 0.3 } },
-  { id: 'kage',   name: 'カゲ',   job: 'farmer',     home: 'house5', key: true, tone: 'lazy', hair: 'spiky',
+  { id: 'kage',   name: 'カゲ',   job: 'farmer',     home: 'house5', key: true, likesItem: 'sweets', tone: 'lazy', hair: 'spiky',
     likes: '昼寝と、楽なもうけ話',
     persona: '怠け者でずる賢い若者。働くより楽して稼ぐ方法ばかり考えている。いつか町を牛耳りたい。',
     p: { aggression: 0.6, honesty: 0.1, sociability: 0.6, greed: 0.85 } },
+  { id: 'nagi',   name: 'ナギ',   job: 'farmer',     home: 'house1', key: true, likesItem: 'sweets', tone: 'polite', hair: 'short', female: true,
+    likes: '甘いお菓子と、姉さんの作るスープ',
+    persona: 'ハルの妹で、内気で真面目な農家の女性。人見知りだが、一度心を許すととても義理堅い。カゲのことが少し気になっている。',
+    p: { aggression: 0.1, honesty: 0.85, sociability: 0.35, greed: 0.2 } },
+  { id: 'taro',   name: 'タロ',   job: 'guard',      home: 'house2', key: true, likesItem: 'sweets', tone: 'cheerful', hair: 'short',
+    likes: '体を動かすことと、甘いもの',
+    persona: '正義感が強くまっすぐな若い衛兵の男。上司のバンの賄賂ぐせを苦々しく思っている。単純でだまされやすい。',
+    p: { aggression: 0.4, honesty: 0.9, sociability: 0.7, greed: 0.15 } },
 ];
 
-// [名前, 職業, 家, 口調, 髪型, 女性か]
-const BG = [
-  ['トキ', 'farmer', 'house1', 'polite', 'short', false], ['ナギ', 'farmer', 'house2', 'cheerful', 'long', true],
-  ['ソラ', 'farmer', 'house2', 'lazy', 'spiky', false], ['イオ', 'farmer', 'house4', 'quiet', 'long', true],
-  ['リク', 'farmer', 'house4', 'rough', 'short', false], ['ユメ', 'cook', 'house3', 'cheerful', 'long', true],
-  ['ケン', 'smith', 'house2', 'rough', 'spiky', false], ['モモ', 'merchant', 'house5', 'cheerful', 'long', true],
-  ['タロ', 'guard', 'house4', 'polite', 'short', false], ['ハナ', 'merchant', 'house1', 'polite', 'long', true],
-  ['ジン', 'farmer', 'house3', 'quiet', 'short', false], ['サエ', 'cook', 'house5', 'curious', 'long', true],
-];
-
-const BG_LIKES = ['甘いもの', '散歩', '昼寝', '星を見ること', '釣り', '歌うこと', '料理', '花', '猫', 'うまい酒'];
-
-export function makeBackgroundResidents(rand) {
-  return BG.map(([name, job, home, tone, hair, female], i) => ({
-    id: 'bg' + i, name, job, home, key: false, tone, hair, female,
-    likes: BG_LIKES[Math.floor(rand() * BG_LIKES.length)],
-    persona: '',
-    p: {
-      aggression: +(rand() * 0.6).toFixed(2),
-      honesty: +(0.3 + rand() * 0.7).toFixed(2),
-      sociability: +(0.2 + rand() * 0.8).toFixed(2),
-      greed: +(rand() * 0.7).toFixed(2),
-    },
-  }));
-}
+export function makeBackgroundResidents() { return []; }
 
 // ---- アイテム ----
+// gift: 贈り物として渡せる  price/shop: どこで買えるか
 export const ITEMS = {
+  flower:   { name: '花束', icon: '💐', desc: '贈り物。好きな人に渡すととても喜ばれる。', gift: true, price: 2, shop: 'market' },
+  sweets:   { name: '焼き菓子', icon: '🍪', desc: '贈り物。甘いもの好きに喜ばれる。', gift: true, price: 2, shop: 'market' },
+  book:     { name: '古い本', icon: '📕', desc: '贈り物。物知りや商売人に喜ばれる。', gift: true, price: 4, shop: 'market' },
+  sake:     { name: '酒瓶', icon: '🍶', desc: '贈り物。酒好きに喜ばれる。', gift: true, price: 2, shop: 'tavern' },
   weapon:   { name: '鉄の棍棒', icon: '🏏', desc: '腕力+8' },
   meteor:   { name: '未知の物質', icon: '💎', desc: '空から落ちてきた光る石。研究所で調べられる。' },
   elixir:   { name: '万能薬', icon: '🧪', desc: '使うと体力が全回復する。' },

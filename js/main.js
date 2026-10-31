@@ -61,6 +61,7 @@ function startGame() {
   view.camX = S.player.x - cv.width / view.zoom / 2;
   view.camY = S.player.y - cv.height / view.zoom / 2;
   toast('WASD/矢印で移動（Shiftで走る）。人や建物の中で F キー。');
+  toast('目の前の🏡があなたの家。タンスにお金をしまえる。');
   if (LLM.available()) toast('住民はAIで話します。自由に話しかけてみよう。');
 }
 
@@ -100,6 +101,7 @@ window.addEventListener('keydown', (e) => {
     if (k === 'escape') closeMenu();
     if (k === 'p') setSpeed(S.paused ? 1 : 0);
     if (k === 'b') switchTab('board');
+    if (k === 'i') switchTab('items');
     if (k === 'm') view.showMinimap = !view.showMinimap;
     if (k === '-' ) view.zoom = clamp(view.zoom - 0.25, 0.75, 2.5);
     if (k === '=' || k === '+' || k === ';') view.zoom = clamp(view.zoom + 0.25, 0.75, 2.5);
@@ -198,19 +200,20 @@ function interactKey() {
 // ---------- メニュー ----------
 function openCharMenu(t) {
   menuFor = { type: 'char', id: t.id };
+  S.holdId = t.id;
   const r = rel(t, S.player);
   const acts = Sim.charActions(t);
   const m = $('#menu');
-  m.innerHTML = `<h3>${t.key ? '★' : ''}${t.name}（${JOBS[t.job].name}）</h3><div class="sub2">好感度 ${Math.round(r.like)} ／ 恐怖 ${Math.round(r.fear)}${S.wanted.has(t.id) ? ' ／ <span class="wanted">手配中</span>' : ''}${t.companion ? ' ／ 🤝同行中' : ''}</div>`;
+  m.innerHTML = `<h3>${t.name}（${JOBS[t.job].name}）</h3><div class="sub2">好感度 ${Math.round(r.like)} ／ 恐怖 ${Math.round(r.fear)}${S.wanted.has(t.id) ? ' ／ <span class="wanted">手配中</span>' : ''}${t.companion ? ' ／ 🤝同行中' : ''}</div>`;
   acts.forEach((a, i) => {
     const b = document.createElement('button');
     b.innerHTML = `<span class="k">${i + 1}</span>${a.label}`;
     b.disabled = !!a.disabled;
     if (['attack', 'steal', 'threaten'].includes(a.id)) b.className = 'danger';
     b.onclick = () => {
+      if (a.id === 'talk') { chatTarget = t; closeMenu(); openChat(t); return; }
       closeMenu();
-      if (a.id === 'talk') openChat(t);
-      else Sim.doCharAction(t, a.id);
+      Sim.doCharAction(t, a.id);
     };
     m.appendChild(b);
   });
@@ -234,22 +237,26 @@ function openFacMenu(f) {
   m.hidden = false;
 }
 
-function closeMenu() { menuFor = null; $('#menu').hidden = true; }
+function closeMenu() {
+  menuFor = null; $('#menu').hidden = true;
+  if (!chatTarget) S.holdId = null;
+}
 
 // ---------- 会話 ----------
-const SUGGEST = ['こんにちは', '何してるの？', '食堂に行こうよ', '酒場で一杯どう？', '最近なにかあった？', '仕事ってある？', 'ついてきて'];
+const SUGGEST = ['こんにちは', '何してるの？', '何かあった？', '食堂に行こうよ', '酒場で一杯どう？', '食べ物売って', '雇ってください', 'ついてきて'];
 
 function openChat(t) {
   chatTarget = t;
+  S.holdId = t.id;
   S.paused = true;
   $('#chat').hidden = false;
-  $('#chat-name').textContent = (t.key ? '★' : '') + t.name + `（${JOBS[t.job].name}）`;
+  $('#chat-name').textContent = t.name + `（${JOBS[t.job].name}）`;
   $('#chat-log').innerHTML = '';
   for (const h of t.chatLog.slice(-10)) addMsg(h.who === 'player' ? 'me' : 'them', h.text);
   if (!t.chatLog.length) addMsg('sys', `${t.name}に話しかけた。`);
   $('#chat-note').textContent = LLM.available()
-    ? 'AIが口調をつけて返事します。誘う・頼む・噂を吹き込む・場所を聞く…なんでもどうぞ。'
-    : '例：「食堂に行こうよ」「〇〇ってどんな人？」「研究所はどこ？」「おごるよ」「ついてきて」';
+    ? 'AIが口調をつけて返事します。誘う・頼む・渡す・売り買い・噂を吹き込む…なんでもどうぞ。'
+    : '例：「3Gあげるから一緒に来て」「花束どうぞ」「〇〇ってどんな人？」「研究所はどこ？」「おごるよ」';
   const chips = $('#chat-chips');
   chips.innerHTML = '';
   for (const s of SUGGEST) {
@@ -258,8 +265,42 @@ function openChat(t) {
     b.onclick = () => { $('#chat-text').value = s; sendChat(); };
     chips.appendChild(b);
   }
+  renderTradeBar();
   updateChatRel();
   setTimeout(() => $('#chat-text').focus(), 50);
+}
+
+// 会話中に渡せる物
+function renderTradeBar() {
+  const t = chatTarget;
+  const p = S.player;
+  const bar = $('#chat-trade');
+  bar.innerHTML = '<span class="lbl">渡す：</span>';
+  const add = (label, g, disabled) => {
+    const b = document.createElement('button');
+    b.textContent = label; b.disabled = disabled;
+    b.onclick = () => giveInChat(t, g, label);
+    bar.appendChild(b);
+  };
+  add('💰1G', { coins: 1 }, p.coins < 1);
+  add('💰3G', { coins: 3 }, p.coins < 3);
+  add('💰10G', { coins: 10 }, p.coins < 10);
+  add(`🍞食料(${p.food})`, { item: 'food' }, p.food < 1);
+  for (const it of [...new Set(p.items)]) if (it !== 'weapon') add(`${ITEMS[it].icon}${ITEMS[it].name}`, { item: it }, false);
+}
+
+function giveInChat(t, g, label) {
+  if (chatBusy || chatTarget !== t) return;
+  const res = Sim.giveToNpc(t, g);
+  if (res.react === 'none') return;
+  addMsg('sys', `（${t.name}に${res.label}を渡した）`);
+  const line = Brain.giftLine(t, res);
+  t.chatLog.push({ who: 'player', text: `（${res.label}を渡した）` }, { who: 'them', text: line });
+  addMsg('them', line);
+  if (res.like >= 3) addMsg('sys', `（${t.name}の好感度が${res.like >= 15 ? 'ぐっと' : ''}上がった）`);
+  if (res.react === 'bribe') addMsg('sys', '🚨 手配が取り消された');
+  renderTradeBar();
+  updateChatRel();
 }
 
 function updateChatRel() {
@@ -293,6 +334,7 @@ async function sendChat() {
   if (t.chatLog.length > 20) t.chatLog.splice(0, 2);
   addMsg('them', r.say);
   const out = Sim.applyTalkResult(t, r);
+  renderTradeBar();
   for (const m of out.msgs) { addMsg('sys', m); toast(m); }
   if (r.like >= 3) addMsg('sys', `（${t.name}の好感度が上がった）`);
   if (r.like <= -5) addMsg('sys', `（${t.name}の好感度が下がった）`);
@@ -309,7 +351,7 @@ function closeChat() {
     const last = chatTarget.chatLog[chatTarget.chatLog.length - 1];
     if (last.who === 'them') chatTarget.bubble = { text: last.text, until: performance.now() + 2500 };
   }
-  chatTarget = null; $('#chat').hidden = true; S.paused = $('#speed .on')?.dataset.speed === '0';
+  chatTarget = null; S.holdId = null; $('#chat').hidden = true; S.paused = $('#speed .on')?.dataset.speed === '0';
 }
 
 $('#chat-send').onclick = sendChat;
@@ -391,7 +433,13 @@ function updateUI() {
   const newPosts = S.postSeq - lastBoardSeen;
   $('#board-new').textContent = currentTab !== 'board' && newPosts > 0 ? `+${newPosts}` : '';
 
+  const bn = $('#banner');
+  if (S.banner && performance.now() < S.banner.until) {
+    if (bn.hidden || bn._t !== S.banner.title) { bn.innerHTML = `<b>${esc(S.banner.title)}</b><div>${esc(S.banner.text)}</div>`; bn._t = S.banner.title; }
+    bn.hidden = false;
+  } else bn.hidden = true;
   if (currentTab === 'status') renderStatus();
+  if (currentTab === 'items') renderItems();
   if (currentTab === 'people') renderPeople();
   if (currentTab === 'board') renderBoard();
   if (currentTab === 'log') renderLog();
@@ -410,7 +458,7 @@ function renderStatus() {
       <div>腕力：<b>${(p.str + (p.items.includes('weapon') ? 8 : 0)).toFixed(1)}</b></div><div>職業：<b>${JOBS[p.job].name}</b></div>
     </div>
     ${S.wanted.has('player') ? '<div class="wanted">🚨 衛兵に手配されている！</div>' : ''}
-    <div class="box"><h4>持ち物</h4><div class="items">${items}</div></div>
+    <div class="box"><h4>持ち物 <small>（Iキーで詳しく）</small></h4><div class="items">${items}</div></div>
     <div class="box"><h4>町での立場：${Sim.titleFor(inf)}</h4>
       影響力 ${Math.round(inf.ratio * 100)}%（支持 ${inf.sup}人 ／ 恐怖 ${inf.fear}人 ／ 住民 ${inf.total}人）
       ${meter(inf.ratio * 100, 100, '#c8902a')}
@@ -423,11 +471,34 @@ function renderStatus() {
     </div>
     <div class="box keys2">
       <b>F</b>：話す・建物でできること　<b>Shift</b>：走る<br>
-      <b>B</b>：掲示板　<b>P</b>：一時停止　<b>M</b>：地図　<b>ホイール / − =</b>：拡大縮小<br>
-      建物にはそのまま歩いて入れます。夜は空き家（右下）か酒場で寝よう。
+      <b>I</b>：持ち物　<b>B</b>：掲示板　<b>P</b>：一時停止　<b>M</b>：地図　<b>ホイール / − =</b>：拡大縮小<br>
+      建物にはそのまま歩いて入れます。夜は🏡あなたの家（右下）か酒場で寝よう。
     </div>`;
   const ub = $('#tab-status [data-use]');
   if (ub) ub.onclick = () => Sim.useItem(S.player, ub.dataset.use);
+}
+
+function renderItems() {
+  const p = S.player;
+  const row = (icon, name, desc, btn = '') => `<div class="inv"><div class="ic">${icon}</div><div class="nm"><b>${name}</b><small>${desc}</small></div>${btn}</div>`;
+  let html = '<div class="box">';
+  html += row('💰', `所持金 ${Math.floor(p.coins)}G`, `家のタンス：${Math.floor(p.bank || 0)}G（家で出し入れ）`);
+  html += row('🍞', `食料 ×${p.food}`, '食べると満腹度+30。人に渡すと喜ばれる。', p.food ? '<button data-act="eat">食べる</button>' : '');
+  const counts = {};
+  for (const it of p.items) counts[it] = (counts[it] || 0) + 1;
+  for (const [k, n] of Object.entries(counts)) {
+    const it = ITEMS[k];
+    html += row(it.icon, `${it.name}${n > 1 ? ' ×' + n : ''}`, it.desc, k === 'elixir' ? '<button data-act="elixir">使う</button>' : '');
+  }
+  if (!p.items.length) html += '<div class="sub3">アイテムは持っていない。市場で花束・焼き菓子・古い本、酒場で酒瓶が買える。</div>';
+  html += '</div><div class="box keys2">住民に話しかけて、会話画面の「渡す」ボタンか「〇〇あげる」と入力すると渡せます。好きな物をもらうと住民はとても喜びます（住民タブで好物がわかる）。</div>';
+  if ($('#tab-items')._h !== html) {
+    $('#tab-items').innerHTML = html; $('#tab-items')._h = html;
+    $('#tab-items').querySelectorAll('[data-act]').forEach((b) => b.onclick = () => {
+      if (b.dataset.act === 'eat') Sim.eatOwnFood(); else Sim.useItem(S.player, 'elixir');
+      updateUI();
+    });
+  }
 }
 
 function renderPeople() {
@@ -439,6 +510,7 @@ function renderPeople() {
     const likeW = Math.abs(r.like);
     const detail = expanded === c.id ? `<div class="detail">
       ${c.persona ? esc(c.persona) + '<br>' : ''}
+      好きなもの：${esc(c.likes || '')}${c.likesItem ? `（贈り物なら${ITEMS[c.likesItem].icon}${ITEMS[c.likesItem].name}）` : ''}<br>
       いる場所：${c.alive ? esc(Brain.locName(c)) : '―'}<br>
       ${c.intent?.thought ? `今日の心の声：「${esc(c.intent.thought)}」<br>` : ''}
       体力${Math.round(c.hp)} 満腹${Math.round(c.hunger)} 所持金${Math.floor(c.coins)}G
@@ -446,7 +518,7 @@ function renderPeople() {
       <br>記憶：${c.memory.slice(-3).map(esc).join(' / ') || 'なし'}
     </div>` : '';
     return `<div class="person ${c.alive ? '' : 'dead'}" data-id="${c.id}">
-      <div class="top"><span>${c.key ? '<span class="key">★</span>' : ''}${c.name} <small>${JOBS[c.job].icon}${JOBS[c.job].name}</small></span><span>${st}</span></div>
+      <div class="top"><span>${c.name} <small>${JOBS[c.job].icon}${JOBS[c.job].name}</small></span><span>${st}</span></div>
       <div class="relbar">好感<div class="meter"><i style="width:${likeW}%;background:${r.like >= 0 ? '#6ac060' : '#d05050'}"></i></div>${Math.round(r.like)}
       　恐怖<div class="meter"><i style="width:${r.fear}%;background:#a070d0"></i></div>${Math.round(r.fear)}</div>
       ${detail}</div>`;

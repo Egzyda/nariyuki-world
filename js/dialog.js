@@ -66,6 +66,20 @@ const ASK = /(くれ|貸|かして|ちょうだい|ください|下さい|恵|�
 const YES = /^(うん|はい|いいよ|いいね|いいですね|ok|okay|オッケー|おっけー|もちろん|ぜひ|是非|そうしよう|行こう|いこう|よろしく|お願い|おねがい|わかった|了解|頼む|たのむ|そうする|おごる|奢る)/i;
 const NO = /^(いや|いいえ|やめ|遠慮|ううん|無理|むり|結構|けっこう|だめ|ダメ|また今度|やっぱり)/;
 
+const ITEM_WORDS = {
+  flower: /(花束|はなたば|お花|花)/, sweets: /(焼き菓子|お菓子|おかし|クッキー|菓子)/, book: /(古い本|本)/, sake: /(酒瓶|お酒|酒)/,
+  elixir: /(万能薬|薬)/, meteor: /(光る石|隕石|未知の物質)/, food: /(食べ物|たべもの|食料|パン|ご飯|ごはん|野菜|弁当)/,
+};
+const GIVE = /(あげる|あげます|渡す|わたす|渡します|やるよ|やる$|どうぞ|払う|払います|プレゼント|受け取って|うけとって|お礼|差し上げ|恵んで(やる|あげる))/;
+function parseGift(t) {
+  if (!GIVE.test(t)) return null;
+  const m = t.match(/(\d+)\s*(G|Ｇ|ｇ|g|ゴールド|枚|円)/) || t.match(/([０-９]+)\s*(G|Ｇ|ゴールド|枚|円)/);
+  if (m) return { coins: parseInt(m[1].replace(/[０-９]/g, (d) => '０１２３４５６７８９'.indexOf(d))) };
+  if (/(お金|おかね|金)/.test(t)) return { coins: 1 };
+  for (const [k, re] of Object.entries(ITEM_WORDS)) if (re.test(t)) return { item: k };
+  return null;
+}
+
 export function parseIntent(text, residents, self) {
   const t = text.replace(/\s+/g, '').replace(/[!！]+/g, '！');
   const r = { kind: 'unknown', text: t };
@@ -82,6 +96,23 @@ export function parseIntent(text, residents, self) {
   if (/^(じゃあね|じゃあな|またね|またな|さようなら|さよなら|バイバイ|ばいばい|また今度|おやすみ|失礼します|では、?また)/.test(t)) return { ...r, kind: 'bye' };
   if (/(好きです|愛して|あいして|結婚し|けっこんし|付き合ってください|つきあってください|恋人に)/.test(t)) return { ...r, kind: 'love' };
   if (THREAT.test(t)) return { ...r, kind: 'threat' };
+  // 渡す（「2Gあげる」「花束どうぞ」「3G払うから一緒に来て」）
+  const gift = parseGift(t);
+  if (gift) {
+    const rest = t.split(/(から|ので|代わりに|かわりに)/).slice(2).join('');
+    const then = rest && rest.length > 1 ? parseIntent(rest, residents, self) : null;
+    return { ...r, kind: 'gift', ...gift, then: then && !['unknown', 'question', 'gift'].includes(then.kind) ? then : null };
+  }
+  if (/(何があった|なにがあった|何かあった|なにかあった|なんかあった|どうしたの|どうした[？?]?$|何事|なにごと|泥棒って|叫んで|騒いで|何の騒ぎ)/.test(t)) return { ...r, kind: 'whatHappened' };
+  if (/(雇って|やとって|働かせて|弟子にして|仕事させて|仲間に入れて)/.test(t)) return { ...r, kind: 'hireMe' };
+  {
+    const sell = /(売って|うって|ゆずって|譲って|買わせて|買いたい|買える|売ってる|いくら)/.test(t);
+    if (sell) {
+      const it = Object.entries(ITEM_WORDS).find(([, re]) => re.test(t));
+      if (it && it[0] !== 'food') return { ...r, kind: 'buyItem', item: it[0] };
+      return { ...r, kind: 'buyFood' };
+    }
+  }
   if (!r.target && /(俺|僕|ぼく|私|わたし|あたし|オレ|自分)(の|って|は|が)(こと)?(を)?(どう|好き|嫌い|信用|どんな)/.test(t)) return { ...r, kind: 'opinionMe' };
   if (RUDE.test(t) && !r.target) return { ...r, kind: 'insult' };
   if (/(ごめん|すまない|すまん|すみません|悪かった|申し訳)/.test(t)) return { ...r, kind: 'apology' };
@@ -112,7 +143,7 @@ export function parseIntent(text, residents, self) {
   if (/(元気|げんき|調子|ちょうし|大丈夫|だいじょうぶ|疲れ|つかれ|具合|体調|お腹|おなか|腹減|はらへ|食べた[？?]|食べてる)/.test(t)) return { ...r, kind: 'howareyou' };
   if (/(名前|なまえ|誰|だれ|何者|なにもの|自己紹介|はじめまして|初めまして)/.test(t)) return { ...r, kind: 'intro' };
   if (/(趣味|しゅみ|好きな|好物|こうぶつ|好きなもの)/.test(t)) return { ...r, kind: 'likes' };
-  if (/(噂|うわさ|何かあった|なにかあった|なんかあった|ニュース|事件|最近|さいきん|変わったこと)/.test(t)) return { ...r, kind: 'rumor' };
+  if (/(噂|うわさ|ニュース|事件|最近|さいきん|変わったこと)/.test(t)) return { ...r, kind: 'rumor' };
   if (/(この町|この街|町のこと|町について|この村|ナリユキ)/.test(t)) return { ...r, kind: 'town' };
   if (/(天気|てんき|暑い|あつい|寒い|さむい|晴れ|雨|日照り)/.test(t)) return { ...r, kind: 'weather' };
   if (/(手伝|てつだ|困って|こまって|助けよう|助けたい|力になる|何かできる|なにかできる)/.test(t)) return { ...r, kind: 'help' };
@@ -157,7 +188,7 @@ const L = {
     lazy: ['うわ、アンタかよ。', 'はあ？ なんすか。'],
   },
   intro: {
-    cheerful: ['あたしは{name}！ {job}をやってるよ。よろしくね！'],
+    cheerful: ['{I}は{name}！ {job}をやってるよ。よろしくね！'],
     rough: ['{I}は{name}。{job}だ。覚えとけ。'],
     polite: ['{name}と申します。この町で{job}をしています。'],
     sly: ['手前は{name}、しがない{job}でございます。今後ともごひいきに。'],
@@ -247,7 +278,7 @@ const L = {
     lazy: ['ま、暇だしついてくっす。'],
   },
   refuse: {
-    cheerful: ['ごめんね、あたしも余裕がなくて……。'],
+    cheerful: ['ごめんね、{I}も余裕がなくて……。'],
     rough: ['タダでやる金はねえ。'],
     polite: ['ごめんなさい、今はお分けできるものがなくて。'],
     sly: ['タダで？ ご冗談を。何か見返りがあるなら考えますがね。'],
@@ -255,6 +286,26 @@ const L = {
     curious: ['うーん、それはちょっと無理かな。'],
     quiet: ['……悪いな。'],
     lazy: ['オレだって金ないっすよ。'],
+  },
+  giftLove: {
+    cheerful: ['{item}！？ {I}これ大好きなの！ ありがとう！'],
+    rough: ['お、{item}じゃねえか……わかってるな、お前。'],
+    polite: ['まあ、{item}……！ 大好きなんです。本当にありがとうございます。'],
+    sly: ['これはこれは、{item}！ 手前の好みをよくご存じで。'],
+    stern: ['む、{item}か……！ うむ、ありがたく受け取ろう。'],
+    curious: ['{item}だ！ ずっと欲しかったんだよね、ありがとう！'],
+    quiet: ['……{item}か。……ありがとう。大事にする。'],
+    lazy: ['うわ、{item}じゃん！ マジ神っすね！'],
+  },
+  giftGood: {
+    cheerful: ['{item}くれるの？ ありがとう、助かるよ！'],
+    rough: ['{item}か。……悪いな、もらっとく。'],
+    polite: ['{item}を……？ ありがとうございます。'],
+    sly: ['おや、{item}を？ ありがたく頂戴します。'],
+    stern: ['{item}か。うむ、受け取っておこう。'],
+    curious: ['{item}？ ありがと、うれしいな。'],
+    quiet: ['……{item}か。助かる。'],
+    lazy: ['お、{item}っすか。あざーっす！'],
   },
   thanks: {
     cheerful: ['どういたしまして！ 困ったらいつでも言ってね。'],
@@ -400,6 +451,30 @@ const N = {
   noPending: ['え、何が？', 'ええと、何のことでしょう？'],
   pendingNo: ['そっか、残念。', 'そうですか、残念です。'],
   npcInvite: ['ちょうど{place}に行くところなんだ。一緒にどう？', 'ちょうど{place}に行くところなんです。ご一緒しませんか？'],
+  giftHungry: ['助かった……！ 本当にお腹ぺこぺこだったんだ。恩に着るよ。', '助かりました……！ 本当にお腹が空いていて。このご恩は忘れません。'],
+  giftBig: ['えっ、{item}も！？ そんなにいいの？ ありがとう！', '{item}も……！？ よろしいんですか？ ありがとうございます。'],
+  giftSuspicious: ['……何のつもり？ まあ、もらっておくけど。', '……何のおつもりですか。一応いただいておきます。'],
+  giftBribe: ['……ふむ。今回のことは見なかったことにしよう。', '……わかりました。今回だけですよ。'],
+  giftNone: ['え？ それ、持ってないじゃない。', '……それはお持ちでないようですが？'],
+  giftCursed: ['きれいな石だね……ありがとう。', 'きれいな石ですね……ありがとうございます。'],
+  thanksGift: ['さっきは{gift}ありがとね！', '先ほどは{gift}、ありがとうございました。'],
+  news: ['ねえ聞いて、{event}んだよ！', '聞いてください、{event}んです。'],
+  whVictimPlayer: ['とぼけないで！ あんたに{what}んだから！', 'とぼけないでください。あなたに{what}んですよ。'],
+  whVictim: ['さっき{actor}に{what}んだ！ 許せないよ。', 'さっき{actor}さんに{what}んです……。'],
+  whWitness: ['さっき{event}んだ。物騒だよね……。', 'さっき{event}んです。物騒ですね……。'],
+  whOther: ['実は{event}んだ。', '実は{event}んです。'],
+  whSawPlayer: ['見てたよ。さっきあんたが{event}ところをね。', '見ていましたよ。さっきあなたが{event}ところを。'],
+  whNothing: ['え？ 別に何もないけど？', 'いえ、特に何もありませんよ。'],
+  sellOk: ['いいよ、{price}Gで一つ分けてあげる。はい。', 'いいですよ。{price}Gでお分けします。どうぞ。'],
+  sellNoFood: ['ごめん、今は食べ物を持ってないんだ。食堂か市場に行ってみて。', 'すみません、今は食べ物を持っていません。食堂か市場へどうぞ。'],
+  sellNoMoney: ['{price}Gなんだけど……お金、足りないみたいだね。', '{price}Gですが……お金が足りないようですね。'],
+  sellItemOk: ['毎度！ {item}、{price}Gね。', '毎度ありがとうございます。{item}、{price}Gです。'],
+  sellItemNo: ['{item}？ {I}は売り物なんて持ってないよ。市場に行ってみな。', '{item}でしたら、市場で売っていますよ。'],
+  hireOk: ['いいよ、今日から{job}の仲間だ！ {place}で働いてね。', 'わかりました。今日から{job}として{place}で働いてください。'],
+  hireNo: ['{I}は人を雇える立場じゃないよ。', '私には人を雇う権限はありません。'],
+  hireCold: ['悪いけど、あんたを雇う気はないね。', '申し訳ありませんが、お断りします。'],
+  hireAlready: ['もう{job}でしょ？ がんばってね。', 'もう{job}ですよね。頑張ってください。'],
+  askFoodPlayer: ['……ところで、何か食べ物持ってない？ お腹ぺこぺこで。', '……あの、何か食べ物をお持ちではありませんか？'],
   arrive: {
     diner: ['着いた！ さあ、食べよう。', '着きましたね。いただきましょう。'],
     tavern: ['よし、乾杯しよう！', '乾杯しましょう。'],

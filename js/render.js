@@ -258,6 +258,10 @@ function drawFurn(g, k, x, y, f) {
       px(g, X + 11, Y + 12, 10, 10, '#4a6aa0'); g.fillStyle = '#e8d8a0'; g.beginPath(); g.arc(X + 16, Y + 8, 5, 0, 7); g.fill();
       px(g, X + 9, Y + 2, 14, 3, '#d8b860'); px(g, X + 12, Y, 8, 3, '#d8b860');
       break;
+    case 'chest':
+      px(g, X + 3, Y + 8, 26, 20, '#7a4a20'); px(g, X + 3, Y + 8, 26, 7, '#9a6430'); px(g, X + 3, Y + 15, 26, 2, '#4a2a10');
+      px(g, X + 14, Y + 14, 4, 6, '#e8c040'); px(g, X + 3, Y + 8, 2, 20, '#5a3418'); px(g, X + 27, Y + 8, 2, 20, '#5a3418');
+      break;
     case 'well':
       g.fillStyle = '#8a8a8a'; g.beginPath(); g.arc(X + 16, Y + 18, 12, 0, 7); g.fill();
       g.fillStyle = '#3a6a9a'; g.beginPath(); g.arc(X + 16, Y + 18, 8, 0, 7); g.fill();
@@ -380,6 +384,8 @@ export function draw(ctx, w, h, dt) {
   ctx.fillStyle = '#16200f'; ctx.fillRect(0, 0, w, h);
   ctx.save();
   ctx.scale(Z, Z);
+  const shake = S.effects.find((e) => e.type === 'shake' && e.t <= e.after);
+  if (shake) ctx.translate((Math.random() - 0.5) * 10 * shake.t, (Math.random() - 0.5) * 10 * shake.t);
   ctx.translate(-Math.round(camX * Z) / Z, -Math.round(camY * Z) / Z);
   ctx.drawImage(mapCache, 0, 0);
 
@@ -432,7 +438,8 @@ export function draw(ctx, w, h, dt) {
   }
   // 看板
   for (const f of FACILITIES) {
-    const a = f.kind === 'field' ? 1 : Math.max(0.35, roofAlpha[f.id] ?? 1);
+    const a = f.kind === 'field' ? 1 : (roofAlpha[f.id] ?? 1);
+    if (a < 0.3) continue;
     const cx = f.x * TILE + f.w * TILE / 2;
     const cy = f.kind === 'field' ? f.y * TILE - 6 : f.y * TILE + (f.h - 1) * TILE / 2 - 4;
     ctx.globalAlpha = a;
@@ -451,15 +458,29 @@ export function draw(ctx, w, h, dt) {
   for (const c of list) if (!hiddenUnderRoof(c)) drawBubble(ctx, c, now);
 
   // 演出
-  for (const e of S.effects) if (e.type === 'hit') {
-    ctx.font = '20px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('💥', e.x, e.y - 20 - (0.5 - e.t) * 30);
+  for (const e of S.effects) {
+    if (e.type === 'hit') {
+      ctx.font = '20px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('💥', e.x, e.y - 20 - (0.5 - e.t) * 30);
+    } else if (e.type === 'float') {
+      ctx.globalAlpha = Math.min(1, e.t);
+      label(ctx, e.text, e.x, e.y - (1.4 - e.t) * 22, 11, e.color);
+      ctx.globalAlpha = 1;
+    } else if (e.type === 'meteor') drawMeteorFall(ctx, e);
+  }
+  if (m && m.state === 'ground') {
+    const b = Math.abs(Math.sin(now / 250)) * 6;
+    label(ctx, '▼ 光る石', m.tx * TILE + 16, m.ty * TILE - 10 - b, 10, '#80ffe0');
   }
   ctx.restore();
+  if (m && m.state === 'ground') drawEdgeArrow(ctx, w, h, camX, camY, Z, m);
 
   drawNight(ctx, w, h, camX, camY, Z);
   if (S.droughtUntilDay >= day()) { ctx.fillStyle = 'rgba(255,170,60,0.07)'; ctx.fillRect(0, 0, w, h); }
-  for (const e of S.effects) if (e.type === 'flash') { ctx.fillStyle = `rgba(${e.color || '255,255,255'},${Math.min(1, e.t)})`; ctx.fillRect(0, 0, w, h); }
+  for (const e of S.effects) if (e.type === 'flash') {
+    const a = e.after ? (e.t <= e.after ? e.t / e.after : 0) : Math.min(1, e.t);
+    if (a > 0) { ctx.fillStyle = `rgba(${e.color || '255,255,255'},${a})`; ctx.fillRect(0, 0, w, h); }
+  }
   if (view.showMinimap) drawMinimap(ctx, w, camX, camY, vw, vh);
 }
 
@@ -511,21 +532,86 @@ function drawChar(ctx, c, now) {
   }
   const s = sheetFor(c);
   const moving = c.moving;
-  const fr = moving ? [1, 0, 2, 0][Math.floor((c.anim || 0) / 9) % 4] : 0;
+  const working = !moving && S.t < c.busyUntil && ['work', 'train', 'research', 'forage'].includes(c.activity);
+  const beat = Math.floor(now / 230) % 2;
+  const fr = moving ? [1, 0, 2, 0][Math.floor((c.anim || 0) / 9) % 4] : working ? (beat ? 1 : 2) : 0;
   const di = dirIndex(c.dir || 'down');
   const SC = 2;
   const dw = SPR_W * SC, dh = SPR_H * SC;
-  const bob = moving && fr !== 0 ? -1 : 0;
+  const bob = moving && fr !== 0 ? -1 : working && beat ? -2 : 0;
   // 影
   ctx.fillStyle = 'rgba(0,0,0,0.28)'; ctx.beginPath(); ctx.ellipse(c.x, c.y + 12, 10, 4, 0, 0, 7); ctx.fill();
   if (jailed) ctx.globalAlpha = 0.85;
   ctx.drawImage(s.cv, fr * SPR_W, di * SPR_H, SPR_W, SPR_H, Math.round(c.x - dw / 2), Math.round(c.y + 14 - dh + bob), dw, dh);
   ctx.globalAlpha = 1;
+  if (working && !hiddenUnderRoof(c)) drawWorkFx(ctx, c, now);
   if (c.hurtUntil && now < c.hurtUntil) {
     ctx.globalCompositeOperation = 'source-atop';
     ctx.fillStyle = 'rgba(255,60,60,0.5)'; ctx.fillRect(c.x - dw / 2, c.y + 14 - dh, dw, dh);
     ctx.globalCompositeOperation = 'source-over';
   }
+}
+
+// 作業中の小さな演出（火花・土・湯気・汗）
+function drawWorkFx(ctx, c, now) {
+  const kind = c.activity === 'train' ? 'sweat' : c.activity === 'research' ? 'spark2' : c.activity === 'forage' ? 'dirt'
+    : { smith: 'spark', farmer: 'dirt', cook: 'steam', doctor: 'spark2', researcher: 'spark2', merchant: 'coin', guard: 'none' }[c.job] || 'sweat';
+  const col = { spark: '#ffb040', dirt: '#8a5a2a', steam: '#f0f0f0', sweat: '#80c8ff', spark2: '#c8a0ff', coin: '#ffe070' }[kind];
+  if (!col) return;
+  for (let i = 0; i < 3; i++) {
+    const ph = ((now / 600) + i / 3) % 1;
+    const ang = (i * 2.1 + Math.floor(now / 600) * 1.3) % 6.28;
+    const x = c.x + Math.cos(ang) * 8 * ph + (c.dir === 'left' ? -8 : c.dir === 'right' ? 8 : 0);
+    const y = c.y - 6 - ph * 14 + (kind === 'dirt' ? 14 : 0);
+    ctx.globalAlpha = 1 - ph;
+    ctx.fillStyle = col; ctx.fillRect(Math.round(x), Math.round(y), 2, 2);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawMeteorFall(ctx, e) {
+  const tx = e.tx * TILE + 16, ty = e.ty * TILE + 16;
+  const el = 2.4 - e.t;
+  const k = Math.min(1, el / 1.4);
+  if (k < 1) {
+    const sx = tx + 520 * (1 - k), sy = ty - 760 * (1 - k);
+    const grd = ctx.createLinearGradient(sx, sy, sx + 140, sy - 200);
+    grd.addColorStop(0, 'rgba(255,240,180,0.95)'); grd.addColorStop(1, 'rgba(255,120,40,0)');
+    ctx.strokeStyle = grd; ctx.lineWidth = 10; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx + 140, sy - 200); ctx.stroke();
+    ctx.fillStyle = '#fff6c0'; ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 7); ctx.fill();
+    ctx.fillStyle = '#80ffe0'; ctx.beginPath(); ctx.arc(sx, sy, 5, 0, 7); ctx.fill();
+  } else {
+    const r = (el - 1.4) * 140;
+    ctx.strokeStyle = `rgba(255,220,140,${Math.max(0, 1 - (el - 1.4))})`; ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.arc(tx, ty, r, 0, 7); ctx.stroke();
+  }
+}
+
+// 画面の外にある光る石への矢印
+function drawEdgeArrow(ctx, w, h, camX, camY, Z, m) {
+  const sx = (m.tx * TILE + 16 - camX) * Z, sy = (m.ty * TILE + 16 - camY) * Z;
+  if (sx > 20 && sy > 20 && sx < w - 20 && sy < h - 20) return;
+  const cx = w / 2, cy = h / 2;
+  const ang = Math.atan2(sy - cy, sx - cx);
+  const r = Math.min((w / 2 - 40) / Math.abs(Math.cos(ang) || 1e-6), (h / 2 - 40) / Math.abs(Math.sin(ang) || 1e-6));
+  const ax = cx + Math.cos(ang) * r, ay = cy + Math.sin(ang) * r;
+  const dist = Math.round(Math.hypot(m.tx * TILE + 16 - S.player.x, m.ty * TILE + 16 - S.player.y) / TILE);
+  ctx.save();
+  ctx.translate(ax, ay); ctx.rotate(ang);
+  ctx.fillStyle = '#80ffe0'; ctx.strokeStyle = '#0a4a40'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(16, 0); ctx.lineTo(-8, -11); ctx.lineTo(-8, 11); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.restore();
+  label(ctx, `💎 ${dist}マス`, ax - Math.cos(ang) * 28, ay - Math.sin(ang) * 22, 12, '#80ffe0');
+}
+
+// プレイヤーの作業の進み具合
+function drawProgress(ctx, c) {
+  if (!c.isPlayer || !(S.t < c.busyUntil) || c.busyStart == null || c.activity === 'sleep') return;
+  const k = Math.max(0, Math.min(1, (S.t - c.busyStart) / (c.busyUntil - c.busyStart)));
+  const y = c.y - 46;
+  ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(c.x - 18, y, 36, 6);
+  ctx.fillStyle = '#7ad04a'; ctx.fillRect(c.x - 17, y + 1, 34 * k, 4);
 }
 
 const ACT_ICON = { eat: '🍴', drink: '🍺', train: '💪', heal: '🩹', research: '🔬', buyfood: '🛒', forage: '🌱', board: '📋' };
@@ -539,10 +625,11 @@ function drawCharOverlay(ctx, c, now) {
     ctx.fillStyle = '#ffe070'; ctx.beginPath(); ctx.moveTo(c.x - 5, top - 10 + b); ctx.lineTo(c.x + 5, top - 10 + b); ctx.lineTo(c.x, top - 4 + b); ctx.fill();
     ctx.strokeStyle = '#6a4a00'; ctx.lineWidth = 1; ctx.stroke();
   } else if (near || c.key) {
-    label(ctx, (c.key ? '★' : '') + c.name, c.x, c.y + 20, 9, c.key ? '#ffe9a0' : '#ffffff');
+    label(ctx, c.name, c.x, c.y + 20, 9, '#ffffff');
   }
+  drawProgress(ctx, c);
   let icon = '';
-  if (!c.isPlayer && c.activity && S.t < c.busyUntil) icon = c.activity === 'work' ? JOBS[c.job].icon : ACT_ICON[c.activity] || '';
+  if (c.activity && S.t < c.busyUntil && c.activity !== 'sleep') icon = c.activity === 'work' ? JOBS[c.job].icon : ACT_ICON[c.activity] || '';
   if (S.wanted.has(c.id)) icon = '🚨' + icon;
   if (c.items.includes('meteor')) icon = '💎' + icon;
   if (c.companion) icon = '🤝' + icon;
@@ -660,6 +747,12 @@ function drawMinimap(ctx, w, camX, camY, vw, vh) {
     ctx.fillStyle = c.key ? '#ffe070' : '#ffffff';
     if (S.wanted.has(c.id)) ctx.fillStyle = '#ff5050';
     ctx.fillRect(x0 + c.x * sc - 1, y0 + c.y * sc - 1, 2, 2);
+  }
+  const home = FACILITIES.find((f) => f.mine);
+  if (home) { ctx.strokeStyle = '#ffe070'; ctx.lineWidth = 1.5; ctx.strokeRect(x0 + home.x * MINI, y0 + home.y * MINI, home.w * MINI, (home.h - 1) * MINI); }
+  const mt = S.meteor;
+  if (mt && mt.state === 'ground' && Math.floor(performance.now() / 300) % 2) {
+    ctx.fillStyle = '#80ffe0'; ctx.beginPath(); ctx.arc(x0 + (mt.tx + 0.5) * MINI, y0 + (mt.ty + 0.5) * MINI, 4, 0, 7); ctx.fill();
   }
   const p = S.player;
   ctx.fillStyle = '#ff4a6a'; ctx.fillRect(x0 + p.x * sc - 2, y0 + p.y * sc - 2, 4, 4);

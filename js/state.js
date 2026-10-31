@@ -55,9 +55,21 @@ export function isAwake(c) {
 }
 export function isJailed(c) { return c.jailedUntil > S.t; }
 
-export function memo(c, text) {
+// kind: crime(事件) gift(もらった) talk など。recent には時刻つきで残す
+export function memo(c, text, kind = 'info') {
   c.memory.push(`${day()}日目 ${text}`);
   if (c.memory.length > 12) c.memory.shift();
+  (c.recent ||= []).push({ text, t: S.t, kind });
+  if (c.recent.length > 8) c.recent.shift();
+}
+
+// 最近（hours時間以内）の出来事
+export function recentEvents(c, hours = 8, kinds = null) {
+  return (c.recent || []).filter((e) => S.t - e.t <= hours * 60 && (!kinds || kinds.includes(e.kind))).reverse();
+}
+
+export function floatText(c, text, color = '#ffe070') {
+  S.effects.push({ type: 'float', x: c.x, y: c.y - 30, text, color, t: 1.4 });
 }
 
 export function say(c, text, sec = 4) {
