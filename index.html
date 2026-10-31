@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ナリユキワールド</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- タイトル -->
+<div id="title" class="screen">
+  <div class="title-box">
+    <h1>ナリユキワールド</h1>
+    <p class="sub">AI住民たちと暮らす、成り行きまかせの町</p>
+    <p class="desc">
+      あなたは町にやってきた「よそ者」。所持金は3G。<br>
+      働いて仲良く暮らすのも、盗んで殴ってのし上がるのも、口先で住民を操るのも自由。<br>
+      住民たちは自分で考え、噂し、掲示板に書き込み、ときに裏切ります。<br>
+      15日後、この町はどうなっているでしょうか。
+    </p>
+    <div class="modes">
+      <div class="modes-title">住民の頭脳</div>
+      <label><input type="radio" name="mode" value="none" checked> <b>AIなし</b>（すぐ遊べる・テンプレ会話）</label>
+      <label class="webgpu"><input type="radio" name="mode" value="webllm-small"> <b>ブラウザ内AI 軽量</b>（約1GB・自由会話）</label>
+      <label class="webgpu"><input type="radio" name="mode" value="webllm-std"> <b>ブラウザ内AI 標準</b>（約2GB・より賢い）</label>
+      <label class="api" hidden><input type="radio" name="mode" value="api"> <b>クラウドAI</b>（Cloudflare Workers AI）</label>
+      <div id="gpu-note" class="note"></div>
+    </div>
+    <button id="start" class="big">町に入る</button>
+    <div id="loading" hidden>
+      <div class="bar"><div id="load-bar"></div></div>
+      <div id="load-text">準備中…</div>
+    </div>
+    <div class="keys">移動: WASD / 矢印キー　調べる・話す: E / スペース　掲示板: B　一時停止: P</div>
+  </div>
+</div>
+
+<!-- ゲーム -->
+<div id="game" hidden>
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="hud"></div>
+    <div id="toasts"></div>
+    <div id="menu" hidden></div>
+    <div id="busy" hidden></div>
+    <div id="hint"></div>
+  </div>
+  <aside id="side">
+    <nav id="tabs">
+      <button data-tab="status" class="on">状態</button>
+      <button data-tab="people">住民</button>
+      <button data-tab="board">掲示板 <span id="board-new"></span></button>
+      <button data-tab="log">記録</button>
+    </nav>
+    <section id="tab-status" class="tab on"></section>
+    <section id="tab-people" class="tab"></section>
+    <section id="tab-board" class="tab">
+      <div class="post-form">
+        <textarea id="post-text" maxlength="80" placeholder="掲示板に書き込む（住民の名前を出すと噂になる…）"></textarea>
+        <button id="post-btn">書き込む</button>
+      </div>
+      <div id="board-list"></div>
+    </section>
+    <section id="tab-log" class="tab"></section>
+    <div id="speed">
+      <button data-speed="0">⏸</button>
+      <button data-speed="1" class="on">×1</button>
+      <button data-speed="2">×2</button>
+      <button data-speed="4">×4</button>
+    </div>
+  </aside>
+</div>
+
+<!-- 会話 -->
+<div id="chat" class="modal" hidden>
+  <div class="chat-box">
+    <div class="chat-head"><span id="chat-name"></span><span id="chat-rel"></span><button id="chat-close">✕</button></div>
+    <div id="chat-log"></div>
+    <div class="chat-input">
+      <input id="chat-text" maxlength="80" placeholder="なんでも話しかけてみよう（嘘も交渉も自由）" autocomplete="off">
+      <button id="chat-send">送る</button>
+    </div>
+    <div class="chat-note" id="chat-note"></div>
+  </div>
+</div>
+
+<!-- 通報先の選択 -->
+<div id="picker" class="modal" hidden>
+  <div class="chat-box">
+    <div class="chat-head"><span>誰を通報する？</span><button id="picker-close">✕</button></div>
+    <div id="picker-list"></div>
+  </div>
+</div>
+
+<!-- 結果 -->
+<div id="result" class="screen" hidden>
+  <div class="title-box" id="result-box"></div>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
