@@ -399,7 +399,7 @@ export function draw(ctx, w, h, dt) {
   for (const f of FACILITIES) {
     if (f.kind === 'field') continue;
     let target = 1;
-    if (pf === f) target = (ptx === f.door[0] && pty === f.door[1]) ? 0.35 : 0;
+    if (pf === f && p.alive) target = (ptx === f.door[0] && pty === f.door[1]) ? 0.35 : 0;
     const a = roofAlpha[f.id] ?? 1;
     roofAlpha[f.id] = a + (target - a) * Math.min(1, dt * 10);
   }
@@ -709,7 +709,7 @@ function drawNight(ctx, w, h, camX, camY, Z) {
   // 屋根を外した建物の中は明るく
   for (const f of FACILITIES) if (f.kind !== 'field' && (roofAlpha[f.id] ?? 1) < 0.5)
     lights.push([(f.x + f.w / 2) * TILE, (f.y + f.h / 2) * TILE, Math.max(f.w, f.h) * TILE * 0.75]);
-  lights.push([S.player.x, S.player.y, 90]);
+  if (S.player.alive) lights.push([S.player.x, S.player.y, 90]);
   for (const [lx, ly, r] of lights) {
     const sx = (lx - camX) * Z, sy = (ly - camY) * Z, sr = r * Z;
     if (sx < -sr || sy < -sr || sx > w + sr || sy > h + sr) continue;

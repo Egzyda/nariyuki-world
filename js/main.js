@@ -7,6 +7,7 @@ import * as Sim from './sim.js';
 import * as Brain from './brain.js';
 import * as Wolf from './wolf.js';
 import * as Town from './town.js';
+import { VERSION } from './version.js';
 import { draw, view, resetRenderCache } from './render.js';
 
 const $ = (s) => document.querySelector(s);
@@ -70,6 +71,8 @@ $('#start').onclick = async () => {
 };
 
 function startGame() {
+  titleDemo = false;
+  view.showMinimap = true;
   Sim.initGame(Date.now());
   resetRenderCache();
   $('#title').hidden = true;
@@ -84,11 +87,58 @@ function startGame() {
   if (LLM.available()) toast('住民はAIで話します。自由に話しかけてみよう。');
 }
 
+// ---------- タイトルの背景：本物の町をゆっくり眺める ----------
+const tcv = $('#title-bg');
+const tctx = tcv.getContext('2d');
+let titleDemo = true, demoT = 0;
+function startDemo() {
+  Sim.initGame(20261031);
+  S.player.alive = false;
+  S.speed = 3;
+  S.t = 16 * 60;               // 夕方から始めて、夜の明かりも見せる
+  view.zoom = 1.6;
+  view.showMinimap = false;
+}
+function drawTitle(dt) {
+  const r = tcv.getBoundingClientRect();
+  if (tcv.width !== Math.floor(r.width) || tcv.height !== Math.floor(r.height)) { tcv.width = Math.floor(r.width); tcv.height = Math.floor(r.height); }
+  demoT += dt;
+  // 町の中をゆっくり一周するカメラ
+  S.player.x = 32 * 31 + Math.cos(demoT * 0.035) * 32 * 15;
+  S.player.y = 32 * 19 + Math.sin(demoT * 0.035) * 32 * 8;
+  S.player.hunger = 100;
+  Sim.update(dt);
+  S.toasts.length = 0; S.banner = null;
+  draw(tctx, tcv.width, tcv.height, dt);
+}
+startDemo();
+
+// ---------- 最新版に更新 ----------
+(async function checkVersion() {
+  $('#ver').textContent = `バージョン ${VERSION}`;
+  try {
+    const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+    const j = await r.json();
+    if (j.version && j.version !== VERSION) { $('#update-note').textContent = `新しい版があります（${j.version}）`; $('#update-btn').classList.add('hot'); }
+    else $('#update-note').textContent = '最新版です';
+  } catch { $('#update-note').textContent = ''; }
+})();
+$('#update-btn').onclick = async () => {
+  const btn = $('#update-btn');
+  btn.disabled = true; $('#update-note').textContent = '最新版を読み込み中…';
+  // ブラウザに残っている古いファイルを、サーバーの最新版で置き換えてから再読み込み
+  const files = ['./', 'index.html', 'css/style.css', 'version.json',
+    ...['main', 'sim', 'world', 'render', 'sprites', 'state', 'data', 'brain', 'dialog', 'llm', 'llm-worker', 'wolf', 'town', 'version'].map((f) => `js/${f}.js`)];
+  await Promise.all(files.map((f) => fetch(f, { cache: 'reload' }).catch(() => {})));
+  location.reload();
+};
+
 // ---------- ループ ----------
 let last = performance.now();
 let uiTimer = 0;
 function loop(now) {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (titleDemo && !$('#title').hidden) drawTitle(dt);
   if (!$('#game').hidden && S.player) {
     movePlayer(dt);
     Sim.update(dt);

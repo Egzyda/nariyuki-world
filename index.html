@@ -4,27 +4,35 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ナリユキワールド</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 
 <!-- タイトル -->
 <div id="title" class="screen">
-  <div class="title-box">
-    <h1>ナリユキワールド</h1>
-    <p class="sub">AI住民たちと暮らす、成り行きまかせの町</p>
+  <canvas id="title-bg"></canvas>
+  <div class="title-shade"></div>
+  <div class="title-wrap">
+    <div class="logo">
+      <div class="logo-kicker">AI住民と暮らす、成り行きまかせの町</div>
+      <h1><span>ナリユキ</span><span class="w2">ワールド</span></h1>
+      <div class="logo-line">🌙 この町の誰かが、人狼。</div>
+    </div>
     <p class="desc">
-      あなたは町にやってきた「よそ者」。所持金は3G。<br>
-      ……この町の住民の中に、ひとり<b>人狼</b>がまぎれている。<br>
-      働いて仲良く暮らすのも、盗んで殴ってのし上がるのも、口先で住民を操るのも自由。<br>
-      住民たちは自分で考え、噂し、掲示板に書き込み、ときに裏切ります。<br>
-      15日後、この町はどうなっているでしょうか。
+      あなたは町にやってきた「よそ者」。働いて仲良く暮らすのも、盗んで成り上がるのも、口先で住民を操るのも自由。<br>
+      住民たちは自分で考え、噂し、ときに裏切る。そして夜には――。<br>
+      <span class="desc-em">15日後、この町はどうなっている？</span>
     </p>
     <div class="modes">
       <div class="modes-title">住民の頭脳</div>
-      <label class="api"><input type="radio" name="mode" value="api"> <b>クラウドAI</b>（おすすめ・PCに負担なし。今日の無料枠を使い切ったら自動でブラウザ内AIに切り替え）<span id="api-note" class="note"></span></label>
-      <label class="webgpu"><input type="radio" name="mode" value="webllm-large"> <b>ブラウザ内AI</b>（約5GB・高性能GPU向け）</label>
-      <label><input type="radio" name="mode" value="none" checked> <b>AIなし</b>（すぐ遊べる・言葉の意味を読み取って返事）</label>
+      <label class="mode-card api"><input type="radio" name="mode" value="api">
+        <span class="mc-icon">☁️</span><span class="mc-body"><b>クラウドAI <em>おすすめ</em></b><small>PCに負担なし。無料枠を使い切ったら自動でブラウザ内AIへ</small><span id="api-note" class="note"></span></span></label>
+      <label class="mode-card webgpu"><input type="radio" name="mode" value="webllm-large">
+        <span class="mc-icon">🧠</span><span class="mc-body"><b>ブラウザ内AI</b><small>自分のPCのGPUで動かす（約5GB・GPUメモリ8GB以上推奨）</small></span></label>
+      <label class="mode-card"><input type="radio" name="mode" value="none" checked>
+        <span class="mc-icon">📜</span><span class="mc-body"><b>AIなし</b><small>すぐ遊べる。言葉の意味を読み取って返事する</small></span></label>
       <div id="gpu-note" class="note"></div>
     </div>
     <button id="start" class="big">町に入る</button>
@@ -32,7 +40,12 @@
       <div class="bar"><div id="load-bar"></div></div>
       <div id="load-text">準備中…</div>
     </div>
-    <div class="keys">移動: WASD / 矢印キー（Shiftで走る）　話す・調べる: F　一時停止⇔×1: スペース　掲示板: B　地図: M</div>
+    <div class="keys">移動 WASD・矢印（Shiftで走る）／話す・調べる F／停止⇔×1 スペース／掲示板 B／地図 M</div>
+    <div class="title-foot">
+      <span id="ver"></span>
+      <span id="update-note"></span>
+      <button id="update-btn">⟳ 最新版に更新</button>
+    </div>
   </div>
 </div>
 
