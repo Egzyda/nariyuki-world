@@ -93,6 +93,17 @@ export function parseIntent(text, residents, self) {
   for (const [id, re] of PLACE_WORDS) if (re.test(t)) { r.place = id; break; }
   if (!r.place) for (const [id, re] of IMPLIED_PLACE) if (re.test(t)) { r.place = id; r.implied = true; break; }
 
+  r.yesish = /(お願い|おねがい|頼む|頼んだ|たのむ|よろしく|そうして|任せ|まかせ|いいね|ぜひ)/.test(t);
+  // 頼みごと（実際に住民が行動する）
+  const tm = t.match(/(\d{1,2}|[０-９]{1,2})\s*時/);
+  if (tm && r.place && /(会おう|会いましょう|会わない|待ち合わせ|集合|待ってる|待ってて|待っていて|来て|行こう|で会|に来|行かない)/.test(t)) {
+    const hr = parseInt(tm[1].replace(/[０-９]/g, (d) => '０１２３４５６７８９'.indexOf(d)));
+    return { ...r, kind: 'appoint', hour: hr };
+  }
+  if (/(通報|つうほう|衛兵に(言|伝|知らせ|話)|詰所に(言|伝|知らせ|行|届)|捕まえて|しょっぴ|突き出)/.test(t)) return { ...r, kind: 'reqReport', ask: q };
+  if (/(見張って|みはって|見張り|監視|様子を見て|後をつけ|あとをつけ|目を離さ)/.test(t)) return { ...r, kind: 'reqWatch', ask: q };
+  if (/(広めて|ひろめて|言いふらし|みんなに(言|伝|話|知らせ|教え)|噂を流し|うわさを流し)/.test(t)) return { ...r, kind: 'reqSpread', ask: q };
+  if (r.target && /(懲らしめ|こらしめ|殴って|なぐって|やっつけ|ぶっ飛ばし|ぶっとばし|痛い目に|シメて|しめて)/.test(t)) return { ...r, kind: 'reqAttack', ask: q };
   if (/^(じゃあね|じゃあな|またね|またな|さようなら|さよなら|バイバイ|ばいばい|また今度|おやすみ|失礼します|では、?また)/.test(t)) return { ...r, kind: 'bye' };
   if (/(好きです|愛して|あいして|結婚し|けっこんし|付き合ってください|つきあってください|恋人に)/.test(t)) return { ...r, kind: 'love' };
   if (THREAT.test(t)) return { ...r, kind: 'threat' };

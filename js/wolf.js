@@ -114,6 +114,10 @@ function startHunt() {
   const p = S.wolf.kills.length ? (S.wolf.lieLow ? 0.2 : 0.55) : 0.85;
   S.wolf.lieLow = false;
   if (!chance(p)) return;
+  // 家の前に見張りがいると、半分くらいは気づいて今夜は諦める
+  const wd = FAC[w.home].door;
+  const watcher = S.chars.some((o) => o.alive && o !== w && o.activity === 'watch' && Math.abs(Math.floor(o.x / TILE) - wd[0]) + Math.abs(Math.floor(o.y / TILE) - wd[1]) <= 4);
+  if (watcher && chance(0.5)) return;
   const v = chooseVictim(w);
   if (!v) return;
   if (w.companion) Sim.endCompanion(w, false, true);

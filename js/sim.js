@@ -223,12 +223,31 @@ function updateChar(c, gdt) {
   if (!c.isPlayer) maybeRemark(c);
   if (!c.isPlayer && c.companion && !c.companion.arrived) {
     updateCompanion(c);
-    if (c.companion && c.path.length) move(c, speed * 1.9);
+    if (c.companion && c.path.length) move(c, speed * (c.companion.lead ? 1.15 : 1.9));
     return;
   }
   if (c.path.length) { move(c, speed); if (!c.path.length) reached(c); return; }
   if (c.isPlayer) return;
-  if (c.companion?.arrived) { if (S.t >= c.busyUntil) endCompanion(c, true); return; }
+  if (c.companion?.arrived) {
+    if (S.t >= c.busyUntil) { endCompanion(c, true); return; }
+    // 一緒にいる間のおしゃべり
+    if (S.t >= (c.companion.chatT || 0) && distTiles(c, S.player) < 4) {
+      c.companion.chatT = S.t + 8 + S.rand() * 6;
+      say(c, Brain.togetherLine(c, c.companion.dest), 4);
+    }
+    return;
+  }
+  if (c.activity === 'wait' && c.appointment && S.t < c.busyUntil) {
+    const [px, py] = tilePos(S.player);
+    if (inDest(px, py, c.appointment.place) && distTiles(c, S.player) < 8) {
+      const place = c.appointment.place;
+      c.appointment = null;
+      say(c, pick(['あ、来てくれた！', '待ってたよ！', 'よかった、来てくれて。']));
+      addLike(c, S.player, 5);
+      startCompanion(c, place, false);
+      return;
+    }
+  }
   if (S.t < c.busyUntil) {
     if (c.plan?.targetId && c.activity === 'follow') arrive(c);
     else fidget(c);
@@ -424,6 +443,21 @@ function updateCompanion(c) {
     return;
   }
   const d = distTiles(c, p);
+  if (comp.lead && dest) {
+    // 案内役：目的地へ向かうが、離れすぎたら立ち止まって待つ
+    if (d > 6) {
+      c.path = []; faceTo(c, p);
+      if (S.t >= (comp.callT || 0)) { comp.callT = S.t + 20; say(c, pick(['こっちだよ！', 'ほら、早く！', 'ついてきてね。'])); }
+      return;
+    }
+    if (inDest(cx, cy, dest)) { c.path = []; faceTo(c, p); return; }
+    if (!c.path.length || S.t >= comp.repath) {
+      comp.repath = S.t + 6;
+      const t = dest === 'plaza' ? randomPlazaTile(S.rand) : targetTile(c, dest, 'visit');
+      goTo(c, t[0], t[1]);
+    }
+    return;
+  }
   if (d > 1.5) {
     if (!c.path.length || S.t >= comp.repath) {
       comp.repath = S.t + 2;
@@ -462,7 +496,14 @@ function companionActivity(c, comp) {
   const spotAct = act.replace('_free', '');
   c.plan = null;
   leaveSpot(c);
-  if (comp.dest !== 'plaza') { const t = targetTile(c, comp.dest, spotAct); c.spot = t; goTo(c, t[0], t[1]); }
+  if (comp.dest !== 'plaza') {
+    // プレイヤーのそばの席を選ぶ
+    const seats = ['eat', 'drink', 'sit'].includes(spotAct) ? (SPOTS[comp.dest]?.seat || []).filter((x) => !spotTaken(x, c)) : [];
+    const pl = S.player;
+    seats.sort((a, b) => Math.hypot(a[0] * TILE - pl.x, a[1] * TILE - pl.y) - Math.hypot(b[0] * TILE - pl.x, b[1] * TILE - pl.y));
+    const t = seats[0] || targetTile(c, comp.dest, spotAct);
+    c.spot = t; goTo(c, t[0], t[1]);
+  }
   c.activity = spotAct;
   if (act === 'eat_free' || act === 'eat') {
     if (S.foodStock >= 1) {
@@ -478,12 +519,10 @@ function companionActivity(c, comp) {
 }
 
 // 住民が案内役になってプレイヤーを連れて行く
+// 住民が先に立って案内する（プレイヤーが遅れたら待つ）。着いたら一緒に過ごす
 export function startGuide(c, place) {
-  c.companion = null;
-  c.guiding = { place };
-  const act = place === 'diner' && c.hunger < 85 && c.coins >= D.MEAL_COST ? 'eat' : place === 'tavern' && c.coins >= 1 ? 'drink' : 'visit';
-  if (place === 'plaza') setPlan(c, { place: 'plaza', tile: randomPlazaTile(S.rand), act: 'wander' });
-  else setPlan(c, { place, act });
+  startCompanion(c, place, false);
+  c.companion.lead = true;
 }
 
 // ================= ルールAI =================
@@ -494,6 +533,8 @@ function decide(c) {
   const job = JOBS[c.job];
 
   const tod = S.t % 1440;
+  if (c.task && runTask(c, tod)) return;
+  if (c.appointment && keepAppointment(c)) return;
   if (Wolf.patrolling(c)) { setPlan(c, { place: 'plaza', tile: randomOutdoorTile(S.rand, 10, 24, 52, 34), act: 'patrol' }); return; }
   if (tod >= (S.wolfKnown ? 21 : 21.5) * 60 || h < 6) { setPlan(c, { place: c.home, act: 'sleep' }); return; }
   // 人狼だと強く疑う相手に詰め寄る
@@ -637,13 +678,120 @@ function approachOk(c) {
   return true;
 }
 
+// ================= 頼みごと（会話で頼まれたことを実行する） =================
+const charOf = (id) => (id === 'player' ? S.player : byId(id));
+
+export function assignTask(c, task) {
+  c.task = { ...task, since: S.t, told: [] };
+  const t = charOf(task.targetId);
+  const tn = t ? dispName(t) : '?';
+  const until = Math.floor(S.t / 1440) * 1440 + (S.t % 1440 < 6 * 60 ? 6 * 60 : 30 * 60);
+  if (task.type === 'watch') c.task.until = until;
+  const msg = { report: `${c.name}が詰所へ${tn}のことを伝えに行く`, spread: `${c.name}が${tn}の噂をみんなに広めてくれる`,
+    watch: `${c.name}が今夜${tn}の家を見張ってくれる（朝に報告）`, attack: `${c.name}が${tn}を懲らしめに行った` }[task.type];
+  Wolf.addNote(msg);
+  if (c.companion) endCompanion(c, false, true);
+  c.busyUntil = Math.min(c.busyUntil, S.t + 3);
+  return msg;
+}
+
+function finishTask(c, text) {
+  c.task = null;
+  pushDone(c, text);
+}
+
+function pushDone(c, text) {
+  if (!text) return;
+  c.taskDone = c.taskDone ? { text: c.taskDone.text + text, t: S.t } : { text, t: S.t };
+}
+
+function runTask(c, tod) {
+  const task = c.task;
+  const t = charOf(task.targetId);
+  const night = tod >= 21 * 60 || tod < 6 * 60;
+  if (!t || !t.alive) { finishTask(c, Brain.taskLine(c, 'gone', t)); return false; }
+  switch (task.type) {
+    case 'report':
+      if (night) return false;
+      if (c.job === 'guard' && !c.isWolf) { doReport(c); return false; }
+      setPlan(c, { place: 'guard', act: 'report' });
+      return true;
+    case 'spread': {
+      if (night) return false;
+      if (task.told.length >= 3) { finishTask(c, Brain.taskLine(c, 'spread', t)); return false; }
+      const others = residents().filter((o) => o.alive && o !== c && o !== t && !isJailed(o) && !task.told.includes(o.id) && !(o.inBed));
+      if (!others.length) { finishTask(c, Brain.taskLine(c, 'spread', t)); return false; }
+      others.sort((a, b) => distTiles(c, a) - distTiles(c, b));
+      setPlan(c, { targetId: others[0].id, kind: 'spread', giveUpAt: S.t + 90 });
+      return true;
+    }
+    case 'attack':
+      if (night) return false;
+      c.task = null;
+      say(c, `${dispName(t)}、ちょっと面貸せ！`);
+      setPlan(c, { targetId: t.id, kind: 'attack', giveUpAt: S.t + 120 });
+      pushDone(c, Brain.taskLine(c, 'attack', t));
+      return true;
+    case 'watch': {
+      if (S.t >= task.until) { finishWatch(c, t); return false; }
+      if (!night) return false;
+      if (c.isWolf) return false; // 人狼は見張るふりをするだけ
+      const f = FAC[t.home];
+      const tile = [f.door[0] + (S.rand() < 0.5 ? -1 : 1), f.door[1] + 2];
+      setPlan(c, { place: 'plaza', tile, act: 'watch' });
+      return true;
+    }
+  }
+  return false;
+}
+
+function doReport(c) {
+  const task = c.task;
+  const t = charOf(task.targetId);
+  c.task = null;
+  if (!t || !t.alive) return;
+  const guards = residents().filter((g) => g.alive && g.job === 'guard' && !isJailed(g));
+  const credible = guards.length && guards.some((g) => rel(g, c).like > -20);
+  if (credible) {
+    S.wanted.add(t.id);
+    log(`${c.name}が${dispName(t)}のことを詰所に通報した。${dispName(t)}は手配された。`, 'event');
+    memo(c, `${dispName(t)}のことを詰所に通報した`, 'info');
+    if (S.wolfKnown) for (const g of guards) Wolf.addSus(g, t.id, 15, `${c.name}から通報があった`);
+    pushDone(c, Brain.taskLine(c, 'report', t));
+    if (t.isPlayer) toast('🚨 あなたが通報され、手配された！');
+  } else pushDone(c, Brain.taskLine(c, 'reportFail', t));
+}
+
+function finishWatch(c, t) {
+  const saw = (c.recent || []).find((e) => e.kind === 'night' && e.t >= c.task.since && e.text.includes(t.name));
+  if (saw) { finishTask(c, Brain.taskLine(c, 'watchSaw', t, saw.text)); Wolf.addSus(c, t.id, 20, saw.text.replace(/^夜中に/, '夜中に')); }
+  else if (c.isWolf) finishTask(c, Brain.taskLine(c, 'watchNone', t));
+  else finishTask(c, Brain.taskLine(c, 'watchNone', t));
+}
+
+// 待ち合わせ
+function keepAppointment(c) {
+  const a = c.appointment;
+  if (S.t > a.at + 70) {
+    c.appointment = null;
+    addLike(c, S.player, -8);
+    memo(c, `よそ者に${placeName(a.place)}での待ち合わせをすっぽかされた`, 'info');
+    pushDone(c, Brain.taskLine(c, 'stoodUp', null, placeName(a.place)));
+    return false;
+  }
+  if (S.t < a.at - 40) return false;
+  if (a.place === 'plaza') setPlan(c, { place: 'plaza', tile: randomPlazaTile(S.rand), act: 'wait' });
+  else setPlan(c, { place: a.place, act: 'wait' });
+  return true;
+}
+
 // 近くの住民が、手を止めて話しかけに来る
 function tryApproach() {
   const pl = S.player;
   const cands = residents().filter((c) => c.alive && !isJailed(c) && !c.inBed && !c.hunt && !c.companion && c.activity !== 'meeting'
     && c.activity !== 'sleep' && S.holdId !== c.id && distTiles(c, pl) < 22 && approachOk(c));
   if (!cands.length) return;
-  const c = pick(cands);
+  const c = cands.find((x) => x.taskDone) || pick(cands);
   const topic = Brain.approachTopic(c);
   if (!topic) return;
   c.approach = topic;
@@ -736,6 +884,9 @@ function startActivity(c, plan) {
     case 'sit': case 'visit': c.busyUntil = S.t + 30 + S.rand() * 20; break;
     case 'meeting': c.busyUntil = Math.max(S.t, S.meeting?.at || S.t) + 150; c.dir = c.y > FOUNTAIN_Y ? 'up' : 'down'; break;
     case 'patrol': c.busyUntil = S.t + 15 + S.rand() * 15; break;
+    case 'report': doReport(c); c.busyUntil = S.t + 15; break;
+    case 'watch': c.busyUntil = S.t + 30; break;
+    case 'wait': c.busyUntil = (c.appointment?.at || S.t) + 70; say(c, 'まだかな……'); break;
     case 'board': {
       c.busyUntil = S.t + 20; c.dir = 'up';
       const latest = S.board.find((p) => p.authorId === 'player' && !p.replies.some((r) => r.author === c.name) && S.t - p.postedT < 600);
@@ -763,7 +914,7 @@ function startActivity(c, plan) {
   }
   // 夜の遊びは21時半で切り上げて帰る
   const bed = Math.floor(S.t / 1440) * 1440 + 21.5 * 60;
-  if (act !== 'sleep' && act !== 'work' && act !== 'meeting' && act !== 'patrol' && !c.companion) c.busyUntil = Math.min(c.busyUntil, Math.max(bed, S.t + 5));
+  if (!['sleep', 'work', 'meeting', 'patrol', 'watch'].includes(act) && !c.companion) c.busyUntil = Math.min(c.busyUntil, Math.max(bed, S.t + 5));
 }
 
 function payCooks(n) {
@@ -797,6 +948,21 @@ export function interact(a, b, kind) {
       break;
     }
     case 'wolfArrest': Wolf.arrestSuspect(a, b); a.busyUntil = S.t + 20; break;
+    case 'spread': {
+      const task = a.task;
+      if (!task || task.type !== 'spread') break;
+      const t = charOf(task.targetId);
+      task.told.push(b.id);
+      if (!t) break;
+      say(a, `ねえ、${dispName(t)}のこと聞いた？ ${task.what}らしいよ。`, 5);
+      const tr = Wolf.trust(b, a.id);
+      setTimeout(() => b.alive && say(b, tr >= 0.6 ? 'えっ、本当に……？' : 'ふうん……本当かな。'), 1400);
+      addLike(b, t, -10 * tr);
+      memo(b, `${a.name}から、${dispName(t)}が${task.what}と聞いた`, 'info');
+      if (S.wolfKnown) Wolf.addSus(b, t.id, 15 * tr, `${a.name}から${dispName(t)}が怪しいと聞いた`);
+      a.busyUntil = S.t + 15;
+      break;
+    }
     case 'approach': {
       const tp = a.approach;
       a.approach = null;
@@ -1306,6 +1472,7 @@ export function doFacility(fid, act) {
       toast(`🍺 噂：「${rumor}」`);
       log(`酒場で聞いた噂：${rumor}`);
       for (const o of nearby(p, 5)) addLike(o, p, 2);
+      for (const o of S.chars) if (o.companion?.arrived && o.companion.dest === 'tavern') { addLike(o, p, 4); say(o, '乾杯！'); }
       break;
     }
     case 'sleep':
@@ -1437,6 +1604,13 @@ export function applyTalkResult(t, r) {
     }
   }
   if (r.note) Wolf.addNote(r.note);
+  if (r.task) { const m = assignTask(t, r.task); out.msgs.push(`🤝 ${m}`); out.close = r.task.type !== 'watch' ? true : out.close; }
+  if (r.appointment) {
+    t.appointment = { ...r.appointment, missed: false };
+    const hh = Math.floor((r.appointment.at % 1440) / 60);
+    const m = `${hh}時に${placeName(r.appointment.place)}で${t.name}と待ち合わせ`;
+    Wolf.addNote(m); out.msgs.push(`📅 ${m}`);
+  }
   if (r.meeting) { Wolf.scheduleMeeting('player', 60, 'player'); out.msgs.push('📣 1時間後に広場で話し合いが開かれる'); }
   if (r.accused) S.wolf.playerAccused.add(r.accused);
   if (r.quest) out.msgs.push(`📝 頼まれごと：${t.name}に${r.quest}を届ける（持ち物タブで確認）`);

@@ -202,6 +202,88 @@ function tellEvent(c) {
   return { key: 'whOther', vars: { event: t.replace(/^よそ者から/, 'あんたから') } };
 }
 
+// 頼みごとまわり
+function nameToChar(n) { return n === 'よそ者' ? S.player : S.chars.find((x) => x.name === n) || null; }
+
+// この住民が知っている「悪いことをした人」
+function culpritFromMemory(c) {
+  for (const e of recentEvents(c, 30, ['crime'])) {
+    let m = e.text.match(/^(.+?)が(.+?)に(.+)のを見た$/);
+    if (m) return { who: nameToChar(m[1]), text: e.text };
+    m = e.text.match(/^(.+?)に(盗まれた|殴られた|脅された)$/);
+    if (m) return { who: nameToChar(m[1]), text: e.text };
+  }
+  return null;
+}
+
+function spreadWhat(c, t) {
+  const k = culpritFromMemory(c);
+  if (k && k.who === t) return k.text.replace(/のを見た$/, '').replace(/^.+?が/, '') + 'のを見た人がいる';
+  if (S.wolfKnown) return '人狼かもしれない';
+  return 'よからぬことを企んでいる';
+}
+
+function taskWilling(c, type, t, known) {
+  const like = rel(c, 'player').like + (c.favor || 0) * 8;
+  if (!t.isPlayer && rel(c, t).like >= 50 && type !== 'watch') return 'friend';
+  const knows = known?.who === t || Wolf.sus(c, t.id) >= 40;
+  switch (type) {
+    case 'report': return knows ? like >= -10 : like >= 35;
+    case 'spread': return (knows && like >= 0) || (like >= 30 && c.p.honesty < 0.85);
+    case 'watch': return like >= 30 || (c.job === 'guard' && S.wolfKnown && like >= 0) || (knows && like >= 10);
+    case 'attack':
+      if (c.p.aggression < 0.45 || c.p.honesty > 0.85) return 'violence';
+      return like >= 45 || (!t.isPlayer && rel(c, t).like <= -30 && like >= 10);
+  }
+  return false;
+}
+
+function taskAcceptLine(c, task) {
+  const t = task.targetId === 'player' ? null : S.chars.find((x) => x.id === task.targetId);
+  const tn = t ? t.name : 'あんた';
+  const L = (a, b) => Dlg.lineN(c, [a, b]);
+  if (task.type === 'report') return c.job === 'guard' ? L(`わかった。${tn}のことは${Dlg.firstPerson(c)}が手配する。`, `わかりました。${tn}さんのことは私が手配します。`)
+    : L(`わかった。{I}が詰所に行って、${tn}のことを伝えてくるよ。`, `わかりました。私が詰所に行って、${tn}さんのことを伝えてきます。`);
+  if (task.type === 'spread') return L(`任せて。${tn}のこと、それとなくみんなに話しておくよ。`, `わかりました。${tn}さんのこと、それとなく皆さんに伝えておきます。`);
+  if (task.type === 'watch') return L(`わかった。今夜、${tn}の家をこっそり見張ってみるよ。朝になったら教えるね。`, `わかりました。今夜、${tn}さんの家を見張ってみます。朝になったらお伝えしますね。`);
+  return L(`へっ、任せとけ。${tn}にはちょうどムカついてたんだ。`, `……わかりました。${tn}さんに話をつけてきます。`);
+}
+
+// 頼みごとの結果の報告セリフ
+export function taskLine(c, kind, t, extra = '') {
+  const tn = t ? (t.isPlayer ? 'あんた' : t.name) : '';
+  const L = (a, b) => Dlg.lineN(c, [a, b]);
+  switch (kind) {
+    case 'report': return L(`頼まれてた件、詰所に伝えておいたよ。${tn}は手配されたって。`, `お願いされた件、詰所に伝えておきました。${tn}さんは手配されたそうです。`);
+    case 'reportFail': return L('詰所に行ったけど、まともに取り合ってもらえなかったよ……。', '詰所に行ったのですが、取り合ってもらえませんでした……。');
+    case 'spread': return L(`${tn}のこと、何人かに話しておいたよ。`, `${tn}さんのこと、何人かにお伝えしておきました。`);
+    case 'attack': return L(`${tn}のやつ、少し懲らしめてやったぜ。`, `${tn}さんとは話をつけてきました。`);
+    case 'watchSaw': return L(`見張ってたら……${extra}んだ！ 間違いないよ。`, `見張っていたら……${extra}んです！ 間違いありません。`);
+    case 'watchNone': return L(`一晩じゅう見張ってたけど、${tn}は家から一歩も出てこなかったよ。`, `一晩じゅう見張っていましたが、${tn}さんは家から出てきませんでした。`);
+    case 'stoodUp': return L(`……${extra}でずっと待ってたのに、来なかったね。`, `……${extra}でお待ちしていたのですが、いらっしゃいませんでしたね。`);
+    case 'gone': return L('頼まれてた件だけど……もうどうしようもなくなっちゃった。', 'お願いされた件ですが……もうどうしようもなくなりました。');
+  }
+  return '';
+}
+
+// 頼まれたことの結果を話す（1回だけ）
+export function takeTaskReport(c) {
+  const d = c.taskDone;
+  if (!d) return null;
+  c.taskDone = null;
+  return d.text;
+}
+
+// 一緒に過ごしているときのおしゃべり
+export function togetherLine(c, dest) {
+  const L = (a, b) => Dlg.lineN(c, [a, b]);
+  const opts = dest === 'tavern' ? ['乾杯！', 'ぷはー、うまい！', 'こうやって飲むのもいいね。', 'もう一杯いっちゃう？']
+    : dest === 'diner' ? ['おいしいね。', 'ここの料理、好きなんだ。', 'ヨルの料理は町一番だよ。'] : ['いい時間だね。', 'のんびりできるね。'];
+  if (S.wolfKnown && chance(0.3)) { const top = Wolf.suspectLine(c); if (top) return L(`……ここだけの話、${top.name}が怪しいと思ってるんだ。`, `……ここだけの話ですが、${top.name}が気になっています。`); }
+  if (chance(0.25)) { const ev = recentEvents(c, 12, ['crime'])[0]; if (ev && !ev.text.includes('よそ者')) return L(`そういえば、${ev.text}んだよ。`, `そういえば、${ev.text}んです。`); }
+  return pick(opts);
+}
+
 export function inviteDecision(c, place, treat) {
   const r = rel(c, 'player');
   const h = hour();
@@ -236,6 +318,8 @@ function respond(c, it, raw) {
   const ln = (k, v) => Dlg.line(c, k, v, rnd);
   const pend = c.pending && S.t - c.pending.t < 180 ? c.pending : null;
   c.pending = null;
+  // 「お願いするよ」「頼んだ」なども、持ちかけ中の話への「はい」とみなす
+  if (pend && it.yesish && ['unknown', 'question', 'thanks', 'reqReport'].includes(it.kind)) it = { ...it, kind: 'yes' };
   const sub = (v) => ({ sub: v });
 
   const doInvite = (place, treat) => {
@@ -266,7 +350,9 @@ function respond(c, it, raw) {
       res.say = ln(key);
       if (!c.metPlayer && key !== 'greet_cold') { res.say += ln('intro', { job: jobName(c) }); c.metPlayer = true; }
       res.like = gainLike(c, 1);
-      if (c.lastGift && S.t - c.lastGift.t < 8 * 60 && key !== 'greet_cold') res.say += ln('thanksGift', { gift: c.lastGift.label });
+      const done = takeTaskReport(c);
+      if (done) { res.say += done; res.note = `${c.name}の報告：${done}`; }
+      else if (c.lastGift && S.t - c.lastGift.t < 8 * 60 && key !== 'greet_cold') res.say += ln('thanksGift', { gift: c.lastGift.label });
       else {
         const ev = recentEvents(c, 3, ['crime'])[0];
         if (ev && !ev.text.includes('よそ者')) res.say += ln('news', { event: 'さっき' + ev.text });
@@ -305,6 +391,11 @@ function respond(c, it, raw) {
       break;
     case 'yes':
       if (pend?.type === 'invite') { doInvite(pend.place, true); break; }
+      if (pend?.type === 'task') {
+        res.task = pend.task;
+        res.say = taskAcceptLine(c, pend.task);
+        break;
+      }
       if (pend?.type === 'quest') {
         res.say = Dlg.lineN(c, ['ほんと！？ ありがとう、待ってるね！', '本当ですか！ ありがとうございます、お待ちしています。']);
         res.quest = pend.label; res.like = gainLike(c, 2);
@@ -354,6 +445,42 @@ function respond(c, it, raw) {
           for (const k of ['follow', 'guide', 'action', 'amount', 'belief', 'hire']) if (sub[k] && sub[k] !== 'none') res[k] = sub[k];
         }
       }
+      break;
+    }
+    case 'reqReport': case 'reqWatch': case 'reqSpread': case 'reqAttack': {
+      const type = { reqReport: 'report', reqWatch: 'watch', reqSpread: 'spread', reqAttack: 'attack' }[it.kind];
+      const known = culpritFromMemory(c);
+      const target = it.target || (it.self ? c : null) || known?.who || null;
+      if (!target) { res.say = Dlg.lineN(c, ['え、誰のこと？', 'ええと、どなたのことでしょう？']); break; }
+      if (target === c) { res.say = Dlg.lineN(c, ['……{I}のこと？ 冗談でしょ。', '……私のことですか？ ご冗談を。']); res.like = -4; break; }
+      const task = { type, targetId: target.id, what: spreadWhat(c, target) };
+      const tn = target.isPlayer ? (Dlg.toneOf(c).pol ? 'あなた' : 'あんた') : target.name;
+      if (it.ask && type === 'report') {
+        if (known?.who === target || Wolf.sus(c, target.id) >= 40) {
+          res.say = Dlg.lineN(c, [`そうだね、${tn}のことは詰所に知らせたほうがいいと思う。{I}が行ってこようか？`, `そうですね、${tn}さんのことは詰所に知らせたほうがいいと思います。私が行ってきましょうか？`]);
+          c.pending = { type: 'task', task, t: S.t };
+        } else res.say = Dlg.lineN(c, [`${tn}を？ うーん、はっきりした証拠がないとね……。`, `${tn}さんを？ はっきりした証拠がないと……。`]);
+        break;
+      }
+      const ok = taskWilling(c, type, target, known);
+      if (ok === 'friend') { res.say = Dlg.lineN(c, [`${tn}を売るようなことはできないよ。`, `${tn}さんにそんなことはできません。`]); res.like = -2; break; }
+      if (ok === 'violence') { res.say = Dlg.lineN(c, ['暴力はごめんだよ。', '暴力はいけません。']); break; }
+      if (!ok) { res.say = Dlg.lineN(c, ['うーん……あんたのためにそこまでする義理はないかな。', 'ごめんなさい、それはお引き受けできません。']); break; }
+      res.task = task;
+      res.say = taskAcceptLine(c, task);
+      break;
+    }
+    case 'appoint': {
+      const h = it.hour;
+      const pn = Dlg.placeName(it.place);
+      if (h >= 22 || h < 6) { res.say = ln('sleepy'); break; }
+      if (like < 0 && (c.favor || 0) < 1) { res.say = ln('invite_cold'); break; }
+      let at = Math.floor(S.t / 1440) * 1440 + h * 60;
+      if (at < S.t + 20) at += 1440;
+      const tomorrow = at >= (Math.floor(S.t / 1440) + 1) * 1440;
+      res.appointment = { place: it.place, at };
+      res.say = Dlg.lineN(c, [`いいよ、${tomorrow ? '明日の' : ''}${h}時に${pn}ね。待ってる！`, `わかりました。${tomorrow ? '明日の' : ''}${h}時に${pn}で。お待ちしています。`]);
+      res.like = gainLike(c, 2);
       break;
     }
     case 'wolfWho': {
@@ -598,7 +725,8 @@ async function llmPhrase(c, text, history, res) {
   const r = rel(c, 'player');
   let task;
   if (res.mode === 'free') {
-    task = '相手の言葉に、あなたらしく自然に返事してください。知らないことは知らないと言い、話をそらさないこと。';
+    task = '相手の言葉に、あなたらしく自然に返事してください。知らないことは知らないと言い、話をそらさないこと。' +
+      'この町に町長・役場・警察はない（あるのは衛兵の詰所）。相手に何か頼まれても「やっておく」などの約束はしないこと。';
   } else {
     task = `あなたの返事の内容はすでに決まっています:「${res.say}」\n` +
       'この内容（事実・誘いを受けるか断るか・数字・人や場所の名前）は絶対に変えずに、あなたの口調で自然な話し言葉に言い直してください。相手の言葉に少し反応してもよい。';
@@ -613,6 +741,9 @@ async function llmPhrase(c, text, history, res) {
   if (!out) return null;
   // 判断と逆のことを言っていたら採用しない
   if (res.follow && /(無理|やめとく|遠慮|行けない|行かない|断る|パス)/.test(out)) return null;
+  if (/(町長|村長|役場|警察|市長)/.test(out)) return null;
+  if (res.mode === 'free' && /(報告しよう|連絡しよう|連絡する|伝えておく|伝えてくる|行ってくる|やっておく|任せて|引き受け)/.test(out)) return null;
+  if (res.task && /(無理|できない|お断り|ごめん)/.test(out)) return null;
   if (res.kind === 'invite' && !res.follow && /(行こう|喜んで|いいよ|行きましょう|ついてく)/.test(out)) return null;
   return out;
 }
@@ -673,6 +804,7 @@ export function approachTopic(c) {
   const L = (a, b) => Dlg.lineN(c, [a, b]);
   const opts = [];
   const add = (w, f) => { if (w > 0) opts.push([w, f]); };
+  if (c.taskDone) { const line = takeTaskReport(c); return { line, note: `${c.name}の報告：${line}` }; }
   const m = S.meeting;
   if (m && m.state === 'planned' && like >= -10) {
     const hh = Math.floor((m.at % 1440) / 60);
