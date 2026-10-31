@@ -103,6 +103,22 @@ export function parseIntent(text, residents, self) {
     const then = rest && rest.length > 1 ? parseIntent(rest, residents, self) : null;
     return { ...r, kind: 'gift', ...gift, then: then && !['unknown', 'question', 'gift'].includes(then.kind) ? then : null };
   }
+  // 人狼まわり
+  if (/(会議|話し合|はなしあ|集会|集まろう|集めて|みんなで話)/.test(t)) return { ...r, kind: 'meeting' };
+  // 「〇〇が夜中に出歩いてるのを見た」＝目撃談として告発
+  const who = r.target || (r.self ? self : null);
+  if (who && !q && /(見た|みた|出歩|うろつ|出ていく|出て行|襲われ)/.test(t) && /(夜|人狼|狼|犯人|襲)/.test(t)) return { ...r, target: who, kind: 'accuse', evidence: true };
+  if (/(昨日の夜|昨夜|ゆうべ|夜中|昨晩|夜は|夜の間|夜どこ).*(どこ|何して|なにして|何か|なにか|寝て|変わった|聞こえ|見なかった)/.test(t)) return { ...r, kind: 'alibi' };
+  if (/(人狼|じんろう|狼|おおかみ|オオカミ|犯人)/.test(t) || (who && /(怪しい|あやしい|殺した|襲った)/.test(t))) {
+    if (who) {
+      r.target = who;
+      if (/(じゃない|ではない|違う|ちがう|無実|信じ|やってない|白)/.test(t)) return { ...r, kind: 'defend' };
+      if (q && !/(だと思う|だよ|です|だ！)/.test(t)) return { ...r, kind: 'susAbout' };
+      const evidence = /(見た|聞いた|足あと|足跡|出歩|うろつ|夜中|襲われ|顔)/.test(t);
+      return { ...r, kind: 'accuse', evidence };
+    }
+    if (/(誰|だれ|怪しい|あやしい|思う|知って|わかる|いる|本当)/.test(t)) return { ...r, kind: 'wolfWho' };
+  }
   if (/(何があった|なにがあった|何かあった|なにかあった|なんかあった|どうしたの|どうした[？?]?$|何事|なにごと|泥棒って|叫んで|騒いで|何の騒ぎ)/.test(t)) return { ...r, kind: 'whatHappened' };
   if (/(雇って|やとって|働かせて|弟子にして|仕事させて|仲間に入れて)/.test(t)) return { ...r, kind: 'hireMe' };
   {

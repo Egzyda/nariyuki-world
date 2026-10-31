@@ -1,0 +1,676 @@
+// 人狼：町の住民のひとりが本物の人狼。決まった進行はない。
+// 夜中に本当に家を抜け出して誰かを襲い、朝に見つかって初めて事件になる。
+// 住民はそれぞれ「誰を疑っているか」を頭の中に持ち、噂で疑いが広がる。
+// 話し合いは住民かプレイヤーが言い出したときにだけ開かれる。
+import { TILE, FACILITIES, PLAZA, FOUNTAIN, JOBS } from './data.js';
+import {
+  S, day, hour, timeStr, clamp, pick, chance, rel, addLike, addFear, byId, residents,
+  tilePos, distTiles, isJailed, memo, say, log, toast, post,
+} from './state.js';
+import { facAt, FAC, walkable, furnAt } from './world.js';
+import * as Sim from './sim.js';
+import { toneOf, firstPerson, placeName } from './dialog.js';
+
+const LIFE = 60 * 24 * 60;    // 「ずっと」牢屋
+
+// ================= 準備 =================
+export function initWolf() {
+  const rs = residents();
+  const w = rs[Math.floor(S.rand() * rs.length)];
+  w.isWolf = true;
+  S.wolf = { id: w.id, kills: [], confirmed: false, lieLow: false, frame: null, playerThreat: 0, playerAccused: new Set() };
+  S.wolfKnown = false;
+  S.meeting = null;
+  S.lastMeetingEnd = -9999;
+  S.clues = {};
+  S.notes = [];
+  S.meetingPause = false;
+  for (const c of S.chars) c.sus = {};
+}
+
+export const wolfChar = () => byId(S.wolf?.id);
+const dn = (c) => (c.isPlayer ? 'よそ者' : c.name);
+const pol = (c) => toneOf(c).pol;
+const nm = (c, t) => (t.isPlayer ? (pol(c) ? 'よそ者の方' : 'よそ者') : pol(c) ? `${t.name}さん` : t.name);
+const sleeping = (o) => o.inBed || (o.activity === 'sleep' && S.t < o.busyUntil);
+
+export function addNote(text) {
+  if (S.notes.some((n) => n.text === text)) return;
+  S.notes.unshift({ day: day(), time: timeStr(), text });
+  if (S.notes.length > 60) S.notes.pop();
+}
+
+function locLabel(c) {
+  const [x, y] = tilePos(c);
+  const f = facAt(x, y);
+  if (f) return `${f.name}${f.home ? 'のあたり' : ''}`;
+  if (x >= PLAZA.x && x < PLAZA.x + PLAZA.w && y >= PLAZA.y && y < PLAZA.y + PLAZA.h) return '広場';
+  return y >= 25 ? '家々の並ぶ通り' : '町の通り';
+}
+
+// ================= 疑い =================
+export function sus(c, tid) { return c.sus?.[tid]?.v || 0; }
+
+export function addSus(c, tid, v, why, force = false) {
+  if (!c.sus || c.id === tid || (c.isWolf && !force)) return;
+  const e = c.sus[tid] ||= { v: 0, why: '', w: 0 };
+  e.v = clamp(e.v + v, 0, 100);
+  if (why && v >= e.w) { e.why = why; e.w = v; }
+}
+
+export function trust(c, fromId) {
+  const like = rel(c, fromId).like;
+  return clamp((like + 40) / 80, 0.15, 1.2);
+}
+
+const candidate = (t) => t && t.alive && !t.undiscovered && !t.jailedAsWolf;
+
+export function topSuspect(c) {
+  let best = null;
+  for (const [id, e] of Object.entries(c.sus || {})) {
+    const t = id === 'player' ? S.player : byId(id);
+    if (!candidate(t) || t === c) continue;
+    if (!best || e.v > best.v) best = { t, v: e.v, why: e.why };
+  }
+  return best;
+}
+
+// 犯罪を見た人は、その人を少し疑う（人狼騒ぎのあと）
+export function onCrime(actor, witnesses) {
+  if (!S.wolfKnown) return;
+  for (const w of witnesses) addSus(w, actor.id, 10, '人に乱暴していた');
+}
+
+// ================= 夜の狩り =================
+export function hourly(h) {
+  if (!S.wolf) return;
+  if (h === 1) startHunt();
+  if (h === 21) for (const g of residents()) if (g.alive && g.job === 'guard') g.patrolNight = S.wolfKnown && chance(0.6) ? day() : -1;
+  if (h === 0) revealIfJailed();
+  if (h >= 9 && h <= 18) { proposeIfSuspicious(); guardsAct(); }
+}
+
+export function patrolling(c) {
+  if (c.job !== 'guard' || c.patrolNight == null || c.patrolNight < 0 || isJailed(c)) return false;
+  const tod = S.t % 1440;
+  return (c.patrolNight === day() && tod >= 21 * 60) || (c.patrolNight === day() - 1 && tod < 2 * 60);
+}
+
+function chooseVictim(w) {
+  if (S.wolf.playerThreat >= 40 && S.player.alive && !isJailed(S.player) && chance(0.45)) return S.player;
+  const cands = residents().filter((o) => o.alive && !o.isWolf && !isJailed(o) && !o.undiscovered);
+  if (!cands.length) return null;
+  let best = null, bs = -1e9;
+  for (const o of cands) {
+    const s = -rel(w, o).like + sus(o, w.id) * 1.5 + (o.home === w.home ? -40 : 0) + S.rand() * 40;
+    if (s > bs) { bs = s; best = o; }
+  }
+  return best;
+}
+
+function startHunt() {
+  const w = wolfChar();
+  if (!w || !w.alive || isJailed(w) || w.hunt || day() < 3 || S.holdId === w.id) return;
+  const p = S.wolf.kills.length ? (S.wolf.lieLow ? 0.2 : 0.55) : 0.85;
+  S.wolf.lieLow = false;
+  if (!chance(p)) return;
+  const v = chooseVictim(w);
+  if (!v) return;
+  if (w.companion) Sim.endCompanion(w, false, true);
+  Sim.leaveSpot(w);
+  w.plan = null; w.path = []; w.activity = 'prowl'; w.busyUntil = S.t + 300;
+  w.hunt = { victimId: v.id, stage: 'go', start: S.t, repath: 0, seen: new Set() };
+  // 同じ家の人が物音に気づくことがある
+  for (const o of residents()) {
+    if (o === w || !o.alive || o.home !== w.home || !sleeping(o)) continue;
+    if (chance(0.45)) {
+      memo(o, `夜中に${w.name}がこっそり家を出ていく物音を聞いた`, 'night');
+      addSus(o, w.id, 35, '夜中にこっそり家を出ていった');
+    }
+  }
+}
+
+function goHome(w) {
+  w.hunt.stage = 'back';
+  Sim.goTo(w, w.bed[0], w.bed[1]);
+}
+
+// sim.updateChar から呼ばれる（狩りの最中だけ）
+export function step(w, speed) {
+  const h = w.hunt;
+  watchers(w);
+  if (!w.hunt) return;
+  if (S.t - h.start > 240 || (hour() >= 5 && hour() < 6)) { finishHunt(w, true); return; }
+  if (h.stage === 'go') {
+    const v = h.victimId === 'player' ? S.player : byId(h.victimId);
+    if (!v || !v.alive || isJailed(v)) { goHome(w); return; }
+    if (distTiles(w, v) <= 1.4) { strike(w, v); return; }
+    if (!w.path.length || S.t >= h.repath) {
+      h.repath = S.t + 5;
+      const [tx, ty] = tilePos(v);
+      Sim.goTo(w, tx, ty);
+      if (w.path.length > 1) w.path.pop();
+      if (!w.path.length && distTiles(w, v) > 1.4) { goHome(w); return; }
+    }
+    Sim.move(w, speed * 1.35);
+  } else {
+    if (w.path.length) Sim.move(w, speed * 1.35);
+    else finishHunt(w, false);
+  }
+}
+
+function finishHunt(w, teleport) {
+  if (teleport || !(Math.floor(w.x / TILE) === w.bed[0] && Math.floor(w.y / TILE) === w.bed[1])) {
+    w.x = w.bed[0] * TILE + 16; w.y = w.bed[1] * TILE + 16;
+  }
+  w.path = []; w.hunt = null;
+  w.inBed = true; w.spot = w.bed; w.activity = 'sleep';
+  const d = Math.floor(S.t / 1440); const m = d * 1440 + 6 * 60;
+  w.busyUntil = (S.t < m ? m : m + 1440) + Math.floor(S.rand() * 40);
+}
+
+function strike(w, v) {
+  if (v.isPlayer) {
+    const asleep = v.activity === 'sleep' && v.inBed;
+    v.hp -= asleep ? 55 : 35;
+    v.hurtUntil = performance.now() + 600;
+    S.effects.push({ type: 'hit', x: v.x, y: v.y, t: 0.6 });
+    if (asleep) { v.activity = null; v.busyUntil = S.t; Sim.getOutOfBed(v); }
+    S.banner = { title: '🐺 何者かに襲われた！', text: `暗闇の中、獣のような息づかい……一瞬見えたその顔は、${w.name}だった！ 傷は深いが、なんとか追い払った。`, until: performance.now() + 9000 };
+    addNote(`夜中に襲われた。暗闇で見えた顔は${w.name}だった！`);
+    log('夜中に何者かに襲われた……', 'crime');
+    S.wolf.playerSaw = true;
+    if (v.hp <= 0) Sim.die(v, '人狼');
+    goHome(w);
+    return;
+  }
+  Sim.die(v, '人狼', { silent: true });
+  v.undiscovered = true; v.killedBy = w.id;
+  S.wolf.kills.push({ id: v.id, t: S.t });
+  for (const o of residents()) {
+    if (o === w || !o.alive || o.home !== v.home || !sleeping(o)) continue;
+    if (chance(0.4)) memo(o, '夜中に物音がして、誰かの黒い影が出ていくのを見た気がする', 'night');
+  }
+  goHome(w);
+}
+
+// 夜中に起きている人が、うろつく人狼を見かける
+function watchers(w) {
+  const h = w.hunt;
+  for (const o of S.chars) {
+    if (!o.alive || o === w || isJailed(o) || sleeping(o) || h.seen.has(o.id)) continue;
+    const d = distTiles(o, w);
+    if (d > 6 || !Sim.canSee(o, w)) continue;
+    h.seen.add(o.id);
+    const where = locLabel(w);
+    if (o.isPlayer) {
+      addNote(`${timeStr()}ごろ、夜中なのに${w.name}が${where}を歩いていた`);
+      toast(`🌙 こんな夜中に${w.name}が歩いている……`);
+      if (d <= 3 && h.stage === 'go') { say(w, '……！'); goHome(w); }
+      continue;
+    }
+    memo(o, `夜中に${w.name}が${where}をうろついているのを見た`, 'night');
+    addSus(o, w.id, 45, '夜中にうろついているのを見た');
+    if (o.job === 'guard' && d <= 3) {
+      say(o, `おい${w.name}、こんな夜中に何をしている！`);
+      setTimeout(() => say(w, 'ちょ、ちょっと眠れなくて……'), 900);
+      addSus(o, w.id, 20, '夜中に出歩いているところを問いただした');
+      if (h.stage === 'go') goHome(w);
+    }
+  }
+}
+
+// ================= 発見・手がかり =================
+export function update() {
+  if (!S.wolf) return;
+  for (const v of S.chars) {
+    if (v.alive || !v.undiscovered) continue;
+    let finder = null;
+    for (const o of S.chars) {
+      if (!o.alive || o === v || isJailed(o) || sleeping(o) || o.hunt) continue;
+      if (distTiles(o, v) <= 5 && Sim.canSee(o, v)) { finder = o; break; }
+    }
+    const h = hour();
+    if (!finder && !(h >= 9 && h < 22)) continue;
+    discoverBody(v, finder);
+  }
+  meetingTick();
+}
+
+function makeClue(v, w) {
+  const [vx, vy] = tilePos(v);
+  const f = facAt(vx, vy);
+  if (!f || !f.home) return null;
+  const wh = FAC[w.home];
+  if (wh === f) return { fac: f.id, text: `${f.name}の戸口に、外から押し入った跡がない……。家の中にいた誰かの仕業かもしれない。` };
+  const n = Math.round(Math.abs(wh.x - f.x) / 7);
+  const dir = wh.x > f.x ? '東' : '西';
+  return { fac: f.id, text: `${f.name}の前から、泥まじりの大きな足あとが${dir}へ続いている。${n <= 1 ? 'すぐ隣の家' : `${n}軒${dir}の家`}（${wh.name}）の前で途切れていた。`, home: wh.id };
+}
+
+function discoverBody(v, finder) {
+  v.undiscovered = false;
+  S.wolfKnown = true;
+  const [vx, vy] = tilePos(v);
+  const f = facAt(vx, vy);
+  const w = wolfChar();
+  if (finder) {
+    if (finder.isPlayer) toast(`☠ ${v.name}が倒れている……！`);
+    else say(finder, `${pick(['きゃああ！', 'う、うそだろ……！', 'ひっ……！'])} ${v.name}が……！`, 6);
+  }
+  const first = S.wolf.kills.length <= 1;
+  log(`${v.name}が${f ? f.name : '町'}で無残な姿で見つかった。獣の爪のような傷がある……`, 'death');
+  post('町役場', `【訃報】${v.name}さんが${f ? f.name : '町'}で亡くなっているのが見つかりました。獣に引き裂かれたような傷があります。${first ? '町では「人狼」のしわざだという噂が広がっています。' : '人狼の犠牲者は' + S.wolf.kills.length + '人になりました。'}`, { authorId: 'town' });
+  S.banner = first
+    ? { title: '☠ この町に人狼がいる……！', text: `${v.name}が${f ? f.name : '町'}で無残な姿で見つかった。住民の誰かが人狼かもしれない。現場を調べたり（建物の中でF）、聞き込みをしたり、話し合いを呼びかけて人狼を突き止めよう。`, until: performance.now() + 11000 }
+    : { title: `☠ また犠牲者が……`, text: `${v.name}が襲われた。人狼はまだ町の中にいる。`, until: performance.now() + 8000 };
+  addNote(`${v.name}が${f ? f.name : '町'}で死んでいるのが見つかった（${S.wolf.kills.length}人目）`);
+  for (const o of residents()) {
+    if (!o.alive) continue;
+    memo(o, `${v.name}が人狼に殺された`, 'crime');
+    if (o !== w) for (const x of residents()) if (x.alive && x !== o) addFear(o, x, 3);
+  }
+  const clue = makeClue(v, w);
+  if (clue) S.clues[clue.fac] = clue;
+  // 罪をなすりつける相手を決める
+  if (!S.wolf.frame || !candidate(byId(S.wolf.frame))) {
+    const cands = residents().filter((o) => o.alive && !o.isWolf && o.home !== w.home && !o.jailedAsWolf);
+    cands.sort((a, b) => rel(w, a).like - rel(w, b).like);
+    if (cands[0]) { S.wolf.frame = cands[0].id; addSus(w, cands[0].id, 50, '夜中に出歩いているのを見た気がする', true); }
+  }
+  // 牢屋に閉じ込めていた人は無実だった
+  for (const o of residents()) {
+    if (o.jailedAsWolf && !o.isWolf) {
+      o.jailedAsWolf = false; o.jailedUntil = S.t;
+      for (const x of residents()) if (x.sus?.[o.id]) x.sus[o.id].v = 0;
+      post('町役場', `牢屋に閉じ込められていた${o.name}さんは人狼ではありませんでした。釈放されます。`, { authorId: 'town' });
+      log(`牢屋にいたのに事件が起きた。${o.name}は無実だった……`, 'event');
+      addNote(`${o.name}は牢屋にいたのに事件が起きた → ${o.name}は人狼ではない`);
+    }
+  }
+  if (S.player.jailedAsWolf) {
+    S.player.jailedAsWolf = false; S.player.jailedUntil = S.t;
+    for (const x of residents()) if (x.sus?.player) x.sus.player.v = 0;
+    toast('あなたの無実が証明され、牢屋から出された。');
+  }
+  // 衛兵は現場を調べる
+  for (const g of residents()) {
+    if (!g.alive || g.job !== 'guard' || isJailed(g) || !clue) continue;
+    if (!g.isWolf && clue.home && chance(0.65)) {
+      for (const o of residents()) if (o.alive && o.home === clue.home && o !== g) addSus(g, o.id, 25, `足あとが${FAC[clue.home].name}の前で途切れていた`);
+      memo(g, `現場の足あとが${FAC[clue.home].name}の前で途切れていた`, 'night');
+    }
+  }
+  const alive = residents().filter((o) => o.alive).length;
+  if (alive <= 3) { S.over = true; S.gameOverReason = '町の住民はほとんど人狼に襲われてしまった……'; return; }
+  // 誰かが話し合いを言い出す
+  const leaders = residents().filter((o) => o.alive && !isJailed(o)).sort((a, b) => leaderScore(b) - leaderScore(a));
+  if (leaders[0]) scheduleMeeting(leaders[0].id, 120, 'death');
+}
+
+function leaderScore(o) { return o.p.sociability + o.p.honesty * 0.6 + (o.job === 'guard' ? 0.4 : 0) + S.rand() * 0.3; }
+
+export function investigate(fid) {
+  const c = S.clues[fid];
+  if (!c) return null;
+  addNote(`現場の手がかり：${c.text}`);
+  return c.text;
+}
+
+function revealIfJailed() {
+  const w = wolfChar();
+  if (!w || S.wolf.confirmed || !w.alive) return;
+  if (isJailed(w) && w.jailedAsWolf) reveal('jail');
+}
+
+export function reveal(how) {
+  const w = wolfChar();
+  if (!w || S.wolf.confirmed) return;
+  S.wolf.confirmed = true;
+  const text = how === 'jail' ? `真夜中、牢屋から獣の遠吠えが響いた。牢の中の${w.name}は、毛むくじゃらの獣の姿に変わっていた……！`
+    : `倒れた${w.name}の体が、みるみる獣の姿に変わっていった……！`;
+  S.banner = { title: `🐺 ${w.name}の正体は人狼だった！`, text: text + ' 町に平和が戻りそうだ。', until: performance.now() + 12000 };
+  post('町役場', `【号外】${w.name}の正体は人狼でした。${text}`, { authorId: 'town' });
+  log(`${w.name}の正体は人狼だった！`, 'event');
+  addNote(`${w.name}の正体は人狼だった！`);
+  for (const o of residents()) {
+    if (!o.alive || o === w) continue;
+    memo(o, `${w.name}の正体は人狼だった`, 'crime');
+    addLike(o, w, -100);
+    if (S.wolf.playerAccused.has(w.id)) addLike(o, S.player, 20);
+  }
+  w.jailedUntil = S.t + LIFE;
+  // 疑われて牢屋にいた人は釈放
+  for (const o of [...residents(), S.player]) {
+    if (o !== w && o.jailedAsWolf) { o.jailedAsWolf = false; o.jailedUntil = S.t; addNote(`${dn(o)}は無実だったので釈放された`); }
+  }
+}
+
+// ================= 衛兵・疑いが強い住民の行動 =================
+function guardsAct() {
+  for (const g of residents()) {
+    if (!g.alive || g.job !== 'guard' || isJailed(g) || g.hunt || g.plan?.kind === 'wolfArrest') continue;
+    if (!S.wolfKnown || S.t - (g.lastWolfArrest || -9999) < 8 * 60) continue;
+    const top = topSuspect(g);
+    if (!top || top.v < (g.isWolf ? 45 : 75) || isJailed(top.t)) continue;
+    g.lastWolfArrest = S.t;
+    say(g, `${dn(top.t)}、人狼の件で話がある。来てもらおう`);
+    Sim.setPlan(g, { targetId: top.t.id, kind: 'wolfArrest', giveUpAt: S.t + 150 });
+    g.activity = 'follow'; g.busyUntil = S.t + 150;
+  }
+}
+
+export function arrestSuspect(g, t) {
+  if (!t.alive || isJailed(t)) return;
+  Sim.jail(t, LIFE);
+  t.jailedAsWolf = true;
+  say(g, '人狼の疑いで、牢屋に入ってもらう！', 5);
+  say(t, t.isWolf ? 'ちっ……' : 'ち、違う！ 俺じゃない！', 5);
+  log(`衛兵の${g.name}が、人狼の疑いで${dn(t)}を牢屋に入れた。`, 'event');
+  post(g.name, `人狼の疑いで${dn(t)}を牢屋に入れた。しばらく様子を見る。`, { authorId: g.id });
+  addNote(`衛兵の${g.name}が、人狼の疑いで${dn(t)}を牢屋に入れた`);
+  if (t.isPlayer) toast('人狼の疑いで牢屋に入れられた！ 無実が証明されるまで出られない……');
+  if (!t.isWolf) S.wolf.lieLow = true;
+}
+
+function proposeIfSuspicious() {
+  if (!S.wolfKnown || (S.meeting && S.meeting.state !== 'done') || S.t - S.lastMeetingEnd < 6 * 60) return;
+  for (const c of residents()) {
+    if (!c.alive || isJailed(c) || sleeping(c)) continue;
+    const top = topSuspect(c);
+    if (top && top.v >= 60 && chance(0.35)) { scheduleMeeting(c.id, 90, 'suspect'); return; }
+  }
+}
+
+// ================= 住民どうしの噂 =================
+export function chatLines(a, b) {
+  if (!S.wolfKnown || chance(0.35)) return null;
+  const top = topSuspect(a);
+  if (!top || top.v < 30) return [pick(['人狼、ほんとにいるのかな……', '夜が怖いよ。', '次は誰が狙われるんだろう。']), pick(['戸締まりはしっかりしないとね。', '怖いね……', '早く捕まってほしいよ。'])];
+  const t = top.t;
+  addSus(b, t.id, top.v * 0.25 * trust(b, a.id), `${a.name}が「${top.why}」と言っていた`);
+  const la = `${nm(a, t)}が怪しいと思うんだ。${top.why}から。`;
+  let lb;
+  if (t === b) { lb = '……え、私を疑ってるの！？'; addLike(b, a, -10); }
+  else if (b.isWolf) lb = pick(['そうかもしれないね……', 'やっぱりそうだよね。']);
+  else lb = sus(b, t.id) >= 40 ? 'やっぱり……私もそう思ってた。' : 'うーん、そうなのかな……';
+  return [la, lb];
+}
+
+// ================= 話し合い（自由に呼びかけられる） =================
+const RING = [[24, 16], [25, 16], [26, 16], [27, 16], [23, 17], [28, 17], [23, 18], [28, 18], [24, 19], [25, 19], [26, 19], [27, 19], [23, 16], [28, 16], [23, 19], [28, 19]];
+
+export function meetingActive() { return S.meeting && S.meeting.state !== 'done'; }
+
+export function scheduleMeeting(orgId, delayMin, reason) {
+  if (meetingActive()) return S.meeting;
+  let at = S.t + delayMin;
+  const tod = at % 1440;
+  if (tod < 8 * 60) at += 8 * 60 - tod;
+  else if (tod > 20 * 60) at += 24 * 60 - tod + 8 * 60;
+  const org = orgId === 'player' ? S.player : byId(orgId);
+  S.meeting = { at, org: orgId, reason, state: 'planned', present: [], queue: [], log: [], nextReal: 0, playerIn: false, votes: null, result: null };
+  const hh = Math.floor((at % 1440) / 60);
+  const dayWord = Math.floor(at / 1440) + 1 === day() ? '今日' : '明日';
+  const why = reason === 'death' ? '人狼のことを話し合いたい。' : reason === 'suspect' ? '人狼が誰なのか、みんなで話し合おう。' : '話し合いたいことがある。';
+  post(org.isPlayer ? 'あなた' : org.name, `【呼びかけ】${dayWord}${hh}時、広場の噴水の前に集まってほしい。${why}`, { authorId: orgId });
+  log(`${dn(org)}が${dayWord}${hh}時に広場での話し合いを呼びかけた。`, 'event');
+  toast(`📣 ${org.isPlayer ? 'あなた' : org.name}の呼びかけで、${dayWord}${hh}時に広場で話し合いが開かれる`);
+  addNote(`${dayWord}${hh}時に広場で話し合い（${dn(org)}の呼びかけ）`);
+  for (const c of residents()) if (c.alive) { c.meetingGo = null; memo(c, `${dn(org)}が${hh}時に広場での話し合いを呼びかけた`, 'meeting'); }
+  return S.meeting;
+}
+
+function wantsToGo(c, m) {
+  if (c.meetingGo != null) return c.meetingGo;
+  if (c.id === m.org) return (c.meetingGo = true);
+  const base = (S.wolfKnown ? 0.55 : 0.2) + c.p.sociability * 0.35 + (c.isWolf ? 0.4 : 0) + (m.org === 'player' ? (rel(c, 'player').like / 200) : 0);
+  return (c.meetingGo = chance(base));
+}
+
+function meetingTick() {
+  const m = S.meeting;
+  if (!m || m.state === 'done') return;
+  if (m.state === 'planned' && S.t >= m.at - 40) {
+    m.state = 'gathering';
+    toast('📣 広場に人が集まりはじめた。話し合いに参加するなら噴水の前へ！');
+    let i = 0;
+    for (const c of residents()) {
+      if (!c.alive || isJailed(c) || c.hunt || c.companion || sleeping(c) || !wantsToGo(c, m)) continue;
+      const t = RING[i++ % RING.length];
+      Sim.setPlan(c, { place: 'plaza', tile: t, act: 'meeting' });
+    }
+  }
+  if (m.state === 'gathering' && S.t >= m.at) {
+    const inPlaza = (c) => { const [x, y] = tilePos(c); return x >= PLAZA.x - 1 && x <= PLAZA.x + PLAZA.w && y >= PLAZA.y - 1 && y <= PLAZA.y + PLAZA.h; };
+    const present = residents().filter((c) => c.alive && !isJailed(c) && inPlaza(c));
+    if (present.length < 3) {
+      if (S.t < m.at + 40) return;
+      endMeeting('人が集まらず、話し合いは流れた。');
+      return;
+    }
+    m.present = present.map((c) => c.id);
+    m.playerIn = inPlaza(S.player) && S.player.alive && !isJailed(S.player);
+    m.state = 'talking';
+    buildQueue(m, present);
+    if (!m.playerIn) { while (m.queue.length) speakNext(m); vote(null); }
+    else { S.meetingPause = true; m.nextReal = performance.now() + 800; }
+  }
+  if (m.state === 'talking' && m.playerIn && performance.now() >= m.nextReal) {
+    if (m.queue.length) { const line = speakNext(m); m.nextReal = performance.now() + 1600 + (line?.length || 10) * 45; }
+    else {
+      m.state = 'voting';
+      const org = presentChars(m)[0];
+      addLine(m, org, pol(org) ? 'そろそろ決めましょう。誰を牢屋に入れるか、投票です。' : 'そろそろ決めよう。誰を牢屋に入れるか、投票だ。');
+    }
+  }
+}
+
+function presentChars(m) {
+  const org = m.org === 'player' ? null : byId(m.org);
+  const list = m.present.map(byId).filter((c) => c && c.alive);
+  if (org && list.includes(org)) return [org, ...list.filter((c) => c !== org)];
+  return list;
+}
+
+function addLine(m, c, text, cls = '') {
+  m.log.push({ who: c ? c.name : '', text, cls, id: c?.id });
+  if (c) say(c, text, 5);
+}
+
+function buildQueue(m, present) {
+  const list = presentChars(m);
+  const opener = list[0];
+  const victims = S.wolf.kills.map((k) => byId(k.id)?.name).filter(Boolean);
+  m.queue.push({ type: 'open', c: opener, victims });
+  const order = list.slice(1).sort(() => S.rand() - 0.5);
+  for (const c of [opener, ...order]) m.queue.push({ type: 'say', c });
+}
+
+function speakNext(m) {
+  const item = m.queue.shift();
+  if (!item) return null;
+  const c = item.c;
+  if (!c || !c.alive) return '';
+  let text = '';
+  if (item.type === 'open') {
+    if (m.org === 'player') text = pol(c) ? 'よそ者の方の呼びかけで集まりました。何か話があるそうです。' : 'よそ者の呼びかけで集まった。話があるらしいな。';
+    else if (item.victims.length) text = pol(c) ? `集まってくれてありがとうございます。${item.victims.join('さん、')}さんを襲った人狼が、この中にいるかもしれません。みんなの考えを聞かせてください。`
+      : `集まってくれてありがとう。${item.victims.join('、')}を襲った人狼が、この中にいるかもしれない。みんなの考えを聞かせてくれ。`;
+    else text = pol(c) ? '集まってくれてありがとうございます。みんなで話し合いましょう。' : 'みんな、集まってくれてありがとう。話し合おう。';
+  } else if (item.type === 'say') {
+    const top = topSuspect(c);
+    const night = nightTestimony(c);
+    if (night && !c.isWolf && !(m.told ||= new Set()).has(c.id)) {
+      // 見たこと・聞いたことをみんなに話す
+      m.told.add(c.id);
+      text = pol(c) ? `実は……${night.text}んです。` : `実は……${night.text}んだ。`;
+      const named = residents().find((o) => night.text.includes(o.name) && o !== c);
+      if (named) {
+        for (const id of m.present) { const o = byId(id); if (o && o !== c && o !== named) addSus(o, named.id, 22 * trust(o, c.id), `${c.name}が「${night.text}」と話していた`); }
+        if (m.present.includes(named.id) && !m.replied?.has(named.id)) { (m.replied ||= new Set()).add(named.id); m.queue.unshift({ type: 'defend', c: named, by: c }); }
+      }
+    } else if (top && top.v >= 25) {
+      text = pol(c) ? `私は${nm(c, top.t)}が怪しいと思います。${top.why}からです。` : `${firstPerson(c)}は${nm(c, top.t)}が怪しいと思う。${top.why}から。`;
+      for (const id of m.present) { const o = byId(id); if (o && o !== c) addSus(o, top.t.id, top.v * 0.2 * trust(o, c.id), `話し合いで${c.name}が「${top.why}」と言っていた`); }
+      if (top.t.isPlayer) S.wolf.playerThreat += 0;
+      if (m.present.includes(top.t.id) && !m.replied?.has(top.t.id)) {
+        (m.replied ||= new Set()).add(top.t.id);
+        m.queue.unshift({ type: 'defend', c: top.t, by: c });
+      }
+    } else {
+      text = pick(pol(c) ? ['私には、まだ誰とも言えません……。', 'わかりません。でも、怖いです。'] : ['まだ誰とも言えないな……。', 'わからない。でも、この中にいるなんて信じたくない。']);
+    }
+  } else if (item.type === 'defend') {
+    const by = item.by;
+    if (c.isWolf) {
+      const f = byId(S.wolf.frame);
+      text = f && f !== by && candidate(f) ? `${firstPerson(c)}を疑うの？ それより${nm(c, f)}の方が怪しいよ。夜中に出歩いているのを見た気がするんだ。`
+        : `${firstPerson(c)}が？ 冗談はやめてくれ。何の証拠があるんだ。`;
+      if (f && candidate(f)) for (const id of m.present) { const o = byId(id); if (o && o !== c && o !== f) addSus(o, f.id, 8 * trust(o, c.id), `${c.name}が「${f.name}が夜中に出歩いていた」と言っていた`); }
+    } else text = pick([`ち、違う！ ${firstPerson(c)}は人狼なんかじゃない！`, `${firstPerson(c)}じゃない！ 信じてくれ！`, 'ひどい……私じゃないのに。']);
+  } else if (item.type === 'react') {
+    text = item.text;
+  }
+  if (text) addLine(m, c, text);
+  return text;
+}
+
+// プレイヤーの発言（話し合いの最中）
+export function playerSpeak(text) {
+  const m = S.meeting;
+  if (!m || !['talking', 'voting'].includes(m.state)) return;
+  m.log.push({ who: 'あなた', text, cls: 'me' });
+  const t = text.replace(/\s+/g, '');
+  const target = [...residents(), S.player].find((o) => o !== S.player && t.includes(o.name));
+  if (/(投票|決めよう|決めましょう)/.test(t)) { m.queue.length = 0; m.nextReal = 0; return; }
+  if (!target) {
+    const c = byId(m.present[Math.floor(S.rand() * m.present.length)]);
+    if (c) m.queue.unshift({ type: 'react', c, text: pol(c) ? 'ええと……誰のことを言っているんですか？' : 'で、誰のことを言ってるんだ？' });
+    m.nextReal = Math.min(m.nextReal, performance.now() + 900);
+    return;
+  }
+  const defend = /(じゃない|違う|ちがう|無実|信じ|やってない|白)/.test(t);
+  const evidence = /(見た|聞いた|足あと|足跡|出歩|うろつ|夜中|襲われ|顔)/.test(t);
+  const base = defend ? -18 : evidence ? 30 : 20;
+  let agree = 0, total = 0;
+  for (const id of m.present) {
+    const o = byId(id);
+    if (!o || o === target) continue;
+    const tr = trust(o, 'player');
+    if (o.isWolf) { if (!defend && target !== o) addSus(o, target.id, 0); }
+    else addSus(o, target.id, base * tr, defend ? '' : evidence ? `よそ者が「${text.slice(0, 24)}」と言っていた` : 'よそ者が怪しいと言っていた');
+    total++; if (tr >= 0.6) agree++;
+  }
+  if (!defend) {
+    S.wolf.playerAccused.add(target.id);
+    if (target.isWolf) S.wolf.playerThreat += 20;
+  }
+  const responders = m.present.map(byId).filter((o) => o && o !== target);
+  const r1 = responders.sort((a, b) => trust(b, 'player') - trust(a, 'player'))[0];
+  if (r1) {
+    const trusts = trust(r1, 'player') >= 0.6;
+    const react = defend ? (trusts ? 'あなたがそう言うなら、信じてみようか。' : 'よそ者の言うことなんてあてになるか。')
+      : r1.isWolf ? `そうだよ、${target.name}が怪しいと思ってたんだ！` : trusts ? `……${target.name}か。言われてみれば、そうかもしれない。` : 'よそ者の言うことを、そのまま信じるわけにはいかないね。';
+    m.queue.unshift({ type: 'react', c: r1, text: react });
+  }
+  if (!defend && m.present.includes(target.id)) m.queue.unshift({ type: 'defend', c: target, by: S.player });
+  m.nextReal = Math.min(m.nextReal, performance.now() + 900);
+  void agree; void total;
+}
+
+export function startVoteNow() {
+  const m = S.meeting;
+  if (!m || m.state !== 'talking') return;
+  m.queue.length = 0;
+  m.state = 'voting';
+  const org = presentChars(m)[0];
+  if (org) addLine(m, org, pol(org) ? 'では、投票で決めましょう。' : 'よし、投票で決めよう。');
+}
+
+// 候補者（牢屋に入れる相手）
+export function voteCandidates() {
+  return [...residents().filter((o) => candidate(o) && !isJailed(o)), S.player].filter((o) => o.alive);
+}
+
+// playerChoice: 投票先のid / 'abstain' / null（不参加）
+export function vote(playerChoice) {
+  const m = S.meeting;
+  if (!m) return;
+  const tally = {};
+  const lines = [];
+  for (const id of m.present) {
+    const c = byId(id);
+    if (!c || !c.alive) continue;
+    let choice = null;
+    if (c.isWolf) {
+      // 人狼は、すでに疑われている誰かに乗る
+      const lead = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
+      choice = lead && lead[0] !== c.id ? lead[0] : S.wolf.frame;
+    } else {
+      const top = topSuspect(c);
+      if (top && top.v >= 40) choice = top.t.id;
+    }
+    if (choice && (choice === 'player' || candidate(byId(choice)))) { tally[choice] = (tally[choice] || 0) + 1; lines.push([c, choice]); }
+    else lines.push([c, null]);
+  }
+  if (playerChoice && playerChoice !== 'abstain') tally[playerChoice] = (tally[playerChoice] || 0) + 1;
+  for (const [c, ch] of lines) m.log.push({ who: c.name, text: ch ? `→ ${ch === 'player' ? 'よそ者' : byId(ch).name}` : '→ 決められない', cls: 'vote' });
+  if (playerChoice) m.log.push({ who: 'あなた', text: playerChoice === 'abstain' ? '→ 棄権' : `→ ${byId(playerChoice)?.name || 'よそ者'}`, cls: 'vote me' });
+  const voters = lines.length + (playerChoice ? 1 : 0);
+  const sorted = Object.entries(tally).sort((a, b) => b[1] - a[1]);
+  const [topId, n] = sorted[0] || [null, 0];
+  const tie = sorted[1] && sorted[1][1] === n;
+  if (topId && !tie && n >= 3 && n >= Math.ceil(voters * 0.4)) {
+    const t = topId === 'player' ? S.player : byId(topId);
+    Sim.jail(t, LIFE);
+    t.jailedAsWolf = true;
+    if (t.isPlayer) toast('話し合いの結果、あなたが牢屋に入れられた……！ 無実が証明されるまで出られない。');
+    say(t, t.isWolf ? '……ちっ。' : 'そんな……私じゃないのに！', 6);
+    const msg = `話し合いの結果、${n}票で${dn(t)}を牢屋に閉じ込めることになった。`;
+    endMeeting(msg, t);
+    if (!t.isWolf) S.wolf.lieLow = true;
+    if (playerChoice === topId) S.wolf.playerAccused.add(topId);
+  } else endMeeting(sorted.length ? '票が割れて、結論は出なかった。' : '誰も決められず、話し合いは終わった。');
+}
+
+function endMeeting(msg, jailed = null) {
+  const m = S.meeting;
+  if (!m) return;
+  m.state = 'done';
+  m.result = msg;
+  m.log.push({ who: '', text: msg, cls: 'result' });
+  S.meetingPause = false;
+  S.lastMeetingEnd = S.t;
+  for (const c of residents()) {
+    if (c.activity === 'meeting') { c.busyUntil = S.t; c.activity = null; }
+    if (c.alive && m.present.includes(c.id)) memo(c, msg, 'meeting');
+  }
+  log(msg, 'event');
+  post('町役場', `【話し合いの結果】${msg}`, { authorId: 'town' });
+  addNote(msg);
+  if (jailed) S.banner = { title: '⚖️ 話し合いの結果', text: `${dn(jailed)}が牢屋に閉じ込められた。本当に人狼なら、もう事件は起きないはずだ……。`, until: performance.now() + 8000 };
+}
+
+export function leaveMeeting() {
+  const m = S.meeting;
+  if (!m || !['talking', 'voting'].includes(m.state)) return;
+  m.playerIn = false;
+  S.meetingPause = false;
+  if (m.state === 'talking') while (m.queue.length) speakNext(m);
+  vote(null);
+}
+
+// ================= 会話用 =================
+export function nightTestimony(c) {
+  return (c.recent || []).filter((e) => e.kind === 'night' && S.t - e.t < 30 * 60).reverse()[0] || null;
+}
+
+export function suspectLine(c) {
+  const top = topSuspect(c);
+  if (!top || top.v < 35) return null;
+  return { t: top.t, why: top.why, name: nm(c, top.t) };
+}
+
+export { dn as dispName, nm as nameFor };
+void FACILITIES; void FOUNTAIN; void JOBS; void walkable; void furnAt; void placeName;

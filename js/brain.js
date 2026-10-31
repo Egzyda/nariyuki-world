@@ -6,6 +6,7 @@ import { S, day, hour, timeStr, rel, pick, chance, jobName, post, clamp, residen
 import { ITEMS, JOBS, TILE, PLAZA, MEAL_COST, DRINK_COST } from './data.js';
 import { facAt } from './world.js';
 import * as Dlg from './dialog.js';
+import * as Wolf from './wolf.js';
 
 const STANCES = ['peaceful', 'work', 'scheme', 'aggressive'];
 const rnd = Math.random;
@@ -98,8 +99,21 @@ function selfDesc(c) {
     `いま: ${day()}日目 ${timeStr()}、${locName(c)}で${actText(c)}。所持金${Math.floor(c.coins)}G。${needs(c)}\n` +
     `好きなもの: ${c.likes || '特になし'}。ほかの住民への気持ち: ${relSummary(c)}\n` +
     `最近の記憶: ${c.memory.slice(-4).join(' / ') || '特になし'}\n` +
-    `町の様子: ${situation()}`;
+    `町の様子: ${situation()}` + wolfDesc(c);
 }
+
+function wolfDesc(c) {
+  if (!S.wolf) return '';
+  let t = '';
+  if (S.wolfKnown) {
+    t += `\n町では人狼に${S.wolf.kills.length}人が殺されている。みんな怯えている。`;
+    const top = Wolf.suspectLine(c);
+    if (top && !c.isWolf) t += `あなたが一番疑っているのは${top.t.name}（${top.why}から）。`;
+  }
+  if (c.isWolf) t += `\n【秘密】あなたの正体は人狼。絶対に自分から明かさない。疑われてもとぼけて、${S.wolf.frame ? byName(S.wolf.frame) + 'が怪しいと' : '他の人に'}話をそらす。`;
+  return t;
+}
+const byName = (id) => S.chars.find((x) => x.id === id)?.name || '誰か';
 
 // ================= プレイヤーとの会話 =================
 export async function talk(c, text, history) {
@@ -148,6 +162,7 @@ export function giftLine(c, g) {
     case 'suspicious': return ln('giftSuspicious');
     case 'cursed': return ln('giftCursed');
     case 'none': return ln('giftNone');
+    case 'quest': return Dlg.lineN(c, ['わあ、持ってきてくれたんだ！ ありがとう、約束のお礼だよ。', 'まあ、本当に持ってきてくださったんですね！ 約束のお礼です。']);
     default: return ln('giftGood', { item });
   }
 }
@@ -164,10 +179,12 @@ function previewGift(c, g) {
   }
   if (g.item === 'food') {
     if (p.food < 1) return { react: 'none' };
+    if (c.quest && c.quest.item === 'food') return { react: 'quest', label: '食べ物' };
     return { react: c.hunger < 40 ? 'hungry' : rel(c, p).like < -20 ? 'suspicious' : 'good', label: '食べ物' };
   }
   if (!p.items.includes(g.item)) return { react: 'none' };
   const label = ITEMS[g.item].name;
+  if (c.quest && c.quest.item === g.item) return { react: 'quest', label };
   if (g.item === c.likesItem) return { react: 'love', label };
   if (g.item === 'cursed') return { react: 'cursed', label };
   return { react: rel(c, p).like < -20 ? 'suspicious' : 'good', label };
@@ -288,6 +305,15 @@ function respond(c, it, raw) {
       break;
     case 'yes':
       if (pend?.type === 'invite') { doInvite(pend.place, true); break; }
+      if (pend?.type === 'quest') {
+        res.say = Dlg.lineN(c, ['ほんと！？ ありがとう、待ってるね！', '本当ですか！ ありがとうございます、お待ちしています。']);
+        res.quest = pend.label; res.like = gainLike(c, 2);
+        break;
+      }
+      if (pend?.type === 'meeting') {
+        res.say = Dlg.lineN(c, ['よかった、待ってるよ。', 'よかった。お待ちしていますね。']);
+        break;
+      }
       if (pend?.type === 'wantFood') {
         const g = previewGift(c, { item: 'food' });
         res.say = giftLine(c, g);
@@ -305,6 +331,7 @@ function respond(c, it, raw) {
       res.say = ln('noPending'); res.mode = 'free';
       break;
     case 'no':
+      if (pend?.type === 'quest') { c.quest = null; res.say = ln('pendingNo'); break; }
       if (pend) { res.say = ln('pendingNo'); } else { res.say = ln('ack'); res.mode = 'free'; }
       break;
     case 'dismiss':
@@ -329,10 +356,89 @@ function respond(c, it, raw) {
       }
       break;
     }
+    case 'wolfWho': {
+      if (!S.wolfKnown) { res.say = Dlg.lineN(c, ['人狼？ そんなのおとぎ話でしょ。', '人狼、ですか？ おとぎ話のようなものですよ。']); break; }
+      const top = Wolf.suspectLine(c);
+      if (top) {
+        res.say = Dlg.lineN(c, [`{I}は${top.name}が怪しいと思う。${top.why}から。`, `私は${top.name}が怪しいと思います。${top.why}からです。`]);
+        res.note = `${c.name}は${top.t.isPlayer ? 'あなた' : top.t.name}を疑っている（${top.why}）`;
+      } else res.say = Dlg.lineN(c, ['正直、まだわからない。でも、この町の誰かなんだよね……怖いよ。', 'まだわかりません。でも、この町の誰かだなんて……。']);
+      break;
+    }
+    case 'susAbout': {
+      const t = it.target;
+      if (t === c) { res.say = Dlg.lineN(c, ['え、{I}のこと疑ってるの……？', 'まさか、私を疑っているんですか……？']); res.like = -3; break; }
+      const v = Wolf.sus(c, t.id);
+      const why = c.sus?.[t.id]?.why;
+      if (c.isWolf && t.id === S.wolf.frame) res.say = Dlg.lineN(c, [`${t.name}？ 正直、怪しいと思ってる。夜中に出歩いてるのを見た気がするんだ。`, `${t.name}さんは……少し怪しいと思っています。`]);
+      else if (v >= 40) { res.say = Dlg.lineN(c, [`${t.name}？ 正直、怪しいと思ってる。${why}から。`, `${t.name}さんは怪しいと思います。${why}からです。`]); res.note = `${c.name}は${t.name}を疑っている（${why}）`; }
+      else if (v >= 15) res.say = Dlg.lineN(c, [`${t.name}か……少し気になってはいる。`, `${t.name}さんは……少し気になっています。`]);
+      else res.say = Dlg.lineN(c, [`${t.name}は違うと思うよ。`, `${t.name}さんではないと思います。`]);
+      break;
+    }
+    case 'accuse': {
+      const t = it.target;
+      const tr = Wolf.trust(c, 'player');
+      if (t === c) {
+        if (c.isWolf) {
+          const f = S.wolf.frame && S.chars.find((x) => x.id === S.wolf.frame);
+          res.say = Dlg.lineN(c, [`{I}が？ まさか。それより${f ? f.name : '他の誰か'}を疑ったほうがいいよ。`, `私が？ まさか。${f ? f.name + 'さん' : '他の方'}の方が怪しいと思いますよ。`]);
+          S.wolf.playerThreat += 15; res.like = -4;
+        } else { res.say = Dlg.lineN(c, ['{I}が人狼だって！？ ふざけないでよ！', '私が人狼だなんて……ひどいです。']); res.like = -10; }
+        res.accused = c.id;
+        break;
+      }
+      if (!S.wolfKnown && !it.evidence) { res.say = Dlg.lineN(c, ['人狼？ 何の話？', '人狼……ですか？ 何のお話でしょう。']); break; }
+      res.accused = t.id;
+      if (t.isWolf) S.wolf.playerThreat += it.evidence ? 20 : 10;
+      if (c.isWolf) { res.say = Dlg.lineN(c, [`やっぱり！ {I}も${t.name}が怪しいと思ってたんだ。`, `やはり……私も${t.name}さんが怪しいと思っていました。`]); break; }
+      Wolf.addSus(c, t.id, (it.evidence ? 30 : 16) * tr, it.evidence ? 'よそ者がはっきり見たと言っていた' : 'よそ者が怪しいと言っていた');
+      const v = Wolf.sus(c, t.id);
+      if (rel(c, t).like >= 50 && v < 50) res.say = Dlg.lineN(c, [`${t.name}がそんなことするわけない！`, `${t.name}さんに限って、そんなことはありません。`]);
+      else if (v >= 45) res.say = Dlg.lineN(c, [`……やっぱり、${t.name}なのかな。{I}も気をつけておく。`, `……${t.name}さん、なのでしょうか。気をつけておきます。`]);
+      else res.say = Dlg.lineN(c, [`${t.name}が？ うーん、それだけじゃ信じられないな。`, `${t.name}さんが？ それだけでは何とも……。`]);
+      break;
+    }
+    case 'defend': {
+      const t = it.target;
+      Wolf.addSus(c, t.id, -15 * Wolf.trust(c, 'player'));
+      res.say = Wolf.sus(c, t.id) < 30 ? Dlg.lineN(c, [`そうだね、${t.name}は違う気がする。`, `そうですね、${t.name}さんは違うと思います。`])
+        : Dlg.lineN(c, [`そうかな……{I}はまだ${t.name}を疑ってるけど。`, `そうでしょうか……私はまだ少し疑っています。`]);
+      break;
+    }
+    case 'alibi': {
+      const t = it.target && it.target !== c ? it.target : null;
+      if (t) {
+        const heard = (c.recent || []).find((e) => e.kind === 'night' && e.text.includes(t.name) && S.t - e.t < 30 * 60);
+        if (heard) { res.say = Dlg.lineN(c, [`……実は、${heard.text}んだ。`, `……実は、${heard.text}んです。`]); res.note = `${c.name}の証言：${heard.text}`; }
+        else if (t.home === c.home) res.say = Dlg.lineN(c, [`${t.name}なら、同じ家で寝てたと思うけど……夜中のことまではわからないな。`, `${t.name}さんは同じ家で寝ていたと思います。夜中のことまではわかりませんが。`]);
+        else res.say = Dlg.lineN(c, [`${t.name}の夜のことなんて知らないよ。同じ家の人に聞いてみたら？`, `${t.name}さんのことはわかりません。同じ家の方に聞いてみては？`]);
+        break;
+      }
+      if (c.isWolf) { res.say = Dlg.lineN(c, ['昨日の夜？ ずっと家で寝てたよ。', '昨晩ですか？ ずっと家で寝ていましたよ。']); break; }
+      const night = Wolf.nightTestimony(c);
+      const base = c.patrolNight === day() - 1 ? ['見回りをしてたよ。', '見回りをしていました。'] : ['家で寝てたよ。', '家で寝ていました。'];
+      if (night) { res.say = Dlg.lineN(c, [`${base[0]}……そういえば、${night.text}んだ。`, `${base[1]}……そういえば、${night.text}んです。`]); res.note = `${c.name}の証言：${night.text}`; }
+      else res.say = Dlg.lineN(c, [`${base[0]}特に変わったことはなかったと思う。`, `${base[1]}特に変わったことはありませんでした。`]);
+      break;
+    }
+    case 'meeting': {
+      if (Wolf.meetingActive()) {
+        const at = S.meeting.at;
+        res.say = Dlg.lineN(c, [`もう${Math.floor((at % 1440) / 60)}時に広場で話し合うことになってるよ。`, `${Math.floor((at % 1440) / 60)}時に広場で話し合うことになっていますよ。`]);
+        break;
+      }
+      if (S.wolfKnown || like >= 20) { res.say = Dlg.lineN(c, ['わかった、みんなに声をかけるよ。1時間後に広場の噴水の前ね。', 'わかりました。みんなに声をかけます。1時間後に広場の噴水の前で。']); res.meeting = true; }
+      else res.say = Dlg.lineN(c, ['話し合い？ 何のために？', '話し合い……ですか？ 何についてでしょう。']);
+      break;
+    }
     case 'whatHappened': {
       const e = tellEvent(c);
       if (e) { res.say = ln(e.key, e.vars); if (e.key === 'whVictimPlayer') res.like = -2; }
-      else res.say = ln('whNothing');
+      else if (S.wolfKnown && S.wolf.kills.length) {
+        const v = S.chars.find((x) => x.id === S.wolf.kills[S.wolf.kills.length - 1].id);
+        res.say = Dlg.lineN(c, [`知らないの？ ${v.name}が人狼に殺されたんだよ……。`, `ご存じないんですか？ ${v.name}さんが人狼に襲われたんです……。`]);
+      } else res.say = ln('whNothing');
       break;
     }
     case 'buyFood': {
@@ -559,6 +665,57 @@ export function greetPlayer(c) {
   const r = rel(c, 'player');
   if (r.like >= 30) return Dlg.line(c, 'greet_hi', {}, rnd);
   return Dlg.line(c, 'greet', {}, rnd);
+}
+
+// 住民の方から話しかけるときの話題
+export function approachTopic(c) {
+  const like = rel(c, 'player').like;
+  const L = (a, b) => Dlg.lineN(c, [a, b]);
+  const opts = [];
+  const add = (w, f) => { if (w > 0) opts.push([w, f]); };
+  const m = S.meeting;
+  if (m && m.state === 'planned' && like >= -10) {
+    const hh = Math.floor((m.at % 1440) / 60);
+    add(3, () => ({ line: L(`ねえ、${hh}時から広場で話し合いがあるの。あなたも来てくれない？`, `${hh}時から広場で話し合いがあります。あなたもいらしてください。`), pending: { type: 'meeting' } }));
+  }
+  const top = Wolf.suspectLine(c);
+  if (S.wolfKnown && top && like >= -10 && !top.t.isPlayer) add(2, () => ({ line: L(`ねえ……${top.name}のこと、どう思う？ ${top.why}らしいんだ。`, `あの……${top.name}のこと、どう思われますか？ ${top.why}そうなんです。`), note: `${c.name}は${top.t.name}を疑っている（${top.why}）` }));
+  if (S.wolfKnown && top && top.t.isPlayer && like < 10) add(2.5, () => ({ line: L('……あんた、まさか人狼じゃないよね？ 昨日の夜はどこにいたの？', '……失礼ですが、昨日の夜はどちらにいらっしゃいましたか？') }));
+  const night = Wolf.nightTestimony(c);
+  if (night && like >= 0) add(2.5, () => ({ line: L(`ちょっと聞いて。${night.text}んだ……。誰にも言えなくて。`, `少しよろしいですか。${night.text}んです……。`), note: `${c.name}の証言：${night.text}` }));
+  if (c.hunger < 35 && like >= -10) add(2, () => ({ line: Dlg.line(c, 'askFoodPlayer', {}, rnd).replace(/^……ところで、/, ''), pending: { type: 'wantFood' } }));
+  if (!c.quest && like >= 10 && chance(0.6)) {
+    const item = c.likesItem && chance(0.6) ? c.likesItem : 'food';
+    const label = item === 'food' ? '食べ物' : ITEMS[item].name;
+    const reward = item === 'food' ? 4 : ITEMS[item].price + 3;
+    add(1.2, () => { c.quest = { item, reward, until: S.t + 1440, label }; return { line: L(`ちょっとお願いがあるんだけど……${label}を持ってきてくれない？ お礼に${reward}G払うから。`, `お願いがあるのですが……${label}を持ってきていただけませんか？ お礼に${reward}Gお支払いします。`), pending: { type: 'quest', label } }; });
+  }
+  if (c.lastGift && S.t - c.lastGift.t < 6 * 60) add(1, () => ({ line: Dlg.line(c, 'thanksGift', { gift: c.lastGift.label }, rnd) }));
+  const ev = recentEvents(c, 3, ['crime'])[0];
+  if (ev && !ev.text.includes('よそ者')) add(1.5, () => ({ line: Dlg.line(c, 'news', { event: 'さっき' + ev.text }, rnd) }));
+  if (like <= -35 && c.p.aggression > 0.4) add(1.5, () => ({ line: L('おい、よそ者。この町で何を企んでるんだ？', '……あなた、この町で何をなさるおつもりですか？') }));
+  if (S.wolfKnown && hour() >= 17) add(1, () => ({ line: L('暗くなったら外を出歩かないほうがいいよ。人狼がいるんだから……。', '暗くなったら出歩かないでくださいね。人狼がいるんですから……。') }));
+  const h = hour();
+  if (like >= 25 && c.coins >= MEAL_COST && ((h >= 11 && h <= 13) || (h >= 18 && h <= 19))) add(1, () => ({ line: Dlg.line(c, 'npcInvite', { place: '食堂' }, rnd), pending: { type: 'npcInvite', place: 'diner' } }));
+  if (like >= 20) add(0.6, () => ({ line: greetPlayer(c) }));
+  if (!opts.length) return null;
+  let r = rnd() * opts.reduce((a, o) => a + o[0], 0);
+  for (const [w, f] of opts) { r -= w; if (r <= 0) return f(); }
+  return opts[0][1]();
+}
+
+// すれ違いざまのひとこと
+export function remarkLine(c) {
+  const like = rel(c, 'player').like;
+  const h = hour();
+  const L = (a, b) => Dlg.lineN(c, [a, b]);
+  if (like <= -30) return pick(['……チッ。', '……。', 'じろじろ見るな。']);
+  if (S.wolfKnown && (h >= 19 || h < 6)) return L('夜道に気をつけて……。', '夜道にはお気をつけて……。');
+  if (c.activity === 'work' && S.t < c.busyUntil) return L(pick(['今仕事中なんだ。', 'よいしょっと。', 'ふう、忙しい忙しい。']), 'お仕事中です、すみません。');
+  if (c.hunger < 30) return L('はあ、お腹すいた……。', 'お腹が空きました……。');
+  if (like >= 30) return L(pick([`やあ、${Dlg.toneOf(c).you}！`, 'お、また会ったね。', '今日も元気？']), 'こんにちは。');
+  if (like >= 5) return L('やあ。', 'どうも。');
+  return null;
 }
 
 export function arriveLine(c, place) { return Dlg.line(c, 'arrive', { sub: place }, rnd); }

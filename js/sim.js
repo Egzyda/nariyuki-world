@@ -10,8 +10,10 @@ import {
 } from './state.js';
 import * as Brain from './brain.js';
 import { placeName } from './dialog.js';
+import * as Wolf from './wolf.js';
 
 const MOVE_TILES_PER_MIN = 0.75;
+const FOUNTAIN_Y = (D.FOUNTAIN[1] + 1) * TILE;
 
 function mulberry32(a) {
   return function () {
@@ -81,6 +83,8 @@ export function initGame(seed = Date.now()) {
   setRel('yoru', 'tsuzumi', -30);
   setRel('shion', 'mina', -15);
 
+  Wolf.initWolf();
+  S.callout = null; S.nextApproachT = S.t + 60;
   for (const c of rs) Brain.dailyIntent(c);
   post('町役場', 'ようこそナリユキワールドへ。この掲示板は誰でも自由に書き込めます。', { authorId: 'town' });
   post('町役場', '本日、町に新しい住人（よそ者）がやってきました。皆さん仲良くしましょう。', { authorId: 'town' });
@@ -93,6 +97,8 @@ export function update(dtReal) {
   for (const e of S.effects) e.t -= dtReal;
   S.effects = S.effects.filter((e) => e.t > 0);
   if (S.paused) return;
+  Wolf.update();
+  if (S.meetingPause || S.over) return;
   const p = S.player;
   const fast = p.alive && ((p.activity === 'sleep' && p.busyUntil > S.t) || isJailed(p));
   // 働く・鍛えるなどの間は時間を早送り（待たされる感じを減らす）
@@ -142,6 +148,8 @@ function hourly(h, d) {
   }
   if (d === D.EVENTS.meteor.day && h === S.meteorHour && !S.meteor) meteorFall();
   if (h === 22) for (const c of S.chars) if (c.companion) endCompanion(c, true, true);
+  Wolf.hourly(h);
+  if (h >= 7 && h <= 21 && chance(0.5)) tryApproach();
   if (h === 6) daily(d);
 }
 
@@ -211,6 +219,8 @@ function updateChar(c, gdt) {
     if (c.isPlayer) toast('牢屋から出られた。');
   }
   const speed = gdt * MOVE_TILES_PER_MIN * TILE * (c.hunger < 15 ? 0.6 : 1);
+  if (c.hunt) { Wolf.step(c, speed); return; }
+  if (!c.isPlayer) maybeRemark(c);
   if (!c.isPlayer && c.companion && !c.companion.arrived) {
     updateCompanion(c);
     if (c.companion && c.path.length) move(c, speed * 1.9);
@@ -231,7 +241,7 @@ function updateChar(c, gdt) {
   decide(c);
 }
 
-function move(c, dist) {
+export function move(c, dist) {
   while (dist > 0 && c.path.length) {
     const [tx, ty] = c.path[0];
     const gx = tx * TILE + TILE / 2, gy = ty * TILE + TILE / 2;
@@ -244,7 +254,7 @@ function move(c, dist) {
   }
 }
 
-function goTo(c, tx, ty) {
+export function goTo(c, tx, ty) {
   const [sx, sy] = tilePos(c);
   c.path = findPath(sx, sy, tx, ty);
 }
@@ -264,7 +274,7 @@ function faceFurniture(c) {
   }
 }
 
-function getOutOfBed(c) {
+export function getOutOfBed(c) {
   if (!c.inBed) return;
   c.inBed = false;
   const [x, y] = tilePos(c);
@@ -273,7 +283,7 @@ function getOutOfBed(c) {
   }
 }
 
-function leaveSpot(c) { c.spot = null; if (c.inBed) getOutOfBed(c); }
+export function leaveSpot(c) { c.spot = null; if (c.inBed) getOutOfBed(c); }
 
 function spotTaken(t, c) {
   return S.chars.some((o) => o !== c && o.alive && o.spot && o.spot[0] === t[0] && o.spot[1] === t[1]);
@@ -303,7 +313,7 @@ function targetTile(c, place, act) {
   return t || freeSpot(c, sp.interior) || sp.interior[0] || f.door;
 }
 
-function setPlan(c, plan) {
+export function setPlan(c, plan) {
   leaveSpot(c);
   c.plan = plan;
   c.activity = null;
@@ -344,7 +354,7 @@ function arrive(c) {
   }
 }
 
-function faceTo(c, t) {
+export function faceTo(c, t) {
   const dx = t.x - c.x, dy = t.y - c.y;
   c.dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
 }
@@ -484,7 +494,17 @@ function decide(c) {
   const job = JOBS[c.job];
 
   const tod = S.t % 1440;
-  if (tod >= 21.5 * 60 || h < 6) { setPlan(c, { place: c.home, act: 'sleep' }); return; }
+  if (Wolf.patrolling(c)) { setPlan(c, { place: 'plaza', tile: randomOutdoorTile(S.rand, 10, 24, 52, 34), act: 'patrol' }); return; }
+  if (tod >= (S.wolfKnown ? 21 : 21.5) * 60 || h < 6) { setPlan(c, { place: c.home, act: 'sleep' }); return; }
+  // 人狼だと強く疑う相手に詰め寄る
+  if (S.wolfKnown && p.aggression > 0.55 && chance(0.06)) {
+    const top = Wolf.topSuspect(c);
+    if (top && top.v >= 70 && !top.t.isPlayer && !isJailed(top.t)) {
+      say(c, `${top.t.name}！ お前が人狼なんだろ！`);
+      setPlan(c, { targetId: top.t.id, kind: chance(p.aggression) ? 'attack' : 'threaten', giveUpAt: S.t + 90 });
+      return;
+    }
+  }
   if (c.hp < 35 && c.items.includes('elixir')) { useItem(c, 'elixir'); return; }
 
   if (c.job === 'guard' && S.wanted.size && c.hunger >= 35) {
@@ -576,7 +596,8 @@ function decide(c) {
     ['street', 'wander', 0.35],
     ['board', 'board', c.key ? 0.3 : 0.1],
     ['chat', 'chat', p.sociability],
-    ['player', 'greet', greetOk ? 1.2 : 0],
+    ['player', 'greet', greetOk ? 0.6 : 0],
+    ['player', 'approach', approachOk(c) ? 1.6 : 0],
     [c.home, 'rest', 0.35],
     ['diner', 'sit', c.hunger < 70 ? 0 : 0.1],
   ].filter((o) => o[2] > 0);
@@ -586,6 +607,15 @@ function decide(c) {
   for (const o of opts) { r -= o[2]; if (r <= 0) { choice = o; break; } }
   const [where, act] = choice;
   if (act === 'greet') { setPlan(c, { targetId: 'player', kind: 'greet', giveUpAt: S.t + 40 }); return; }
+  if (act === 'approach') {
+    const topic = Brain.approachTopic(c);
+    if (topic) {
+      c.approach = topic;
+      S.nextApproachT = S.t + 35 + S.rand() * 40;
+      setPlan(c, { targetId: 'player', kind: 'approach', giveUpAt: S.t + 60 });
+      return;
+    }
+  }
   if (act === 'chat') {
     const f = bestFriend(c, (o) => !o.isPlayer) || pickVictim(c, (o) => !o.isPlayer, true);
     if (f) { setPlan(c, { targetId: f.id, kind: 'chat', giveUpAt: S.t + 60 }); return; }
@@ -597,6 +627,41 @@ function decide(c) {
     setPlan(c, { place: 'plaza', tile: [bx, by + 1], act: 'board' }); c.dir = 'up'; return;
   }
   setPlan(c, { place: where, act });
+}
+
+// 住民の方から話しかけに来るか
+function approachOk(c) {
+  const pl = S.player;
+  if (!pl.alive || isJailed(pl) || S.t < (S.nextApproachT || 0) || pl.activity === 'sleep') return false;
+  if (S.callout || distTiles(c, pl) > 16) return false;
+  return true;
+}
+
+// 近くの住民が、手を止めて話しかけに来る
+function tryApproach() {
+  const pl = S.player;
+  const cands = residents().filter((c) => c.alive && !isJailed(c) && !c.inBed && !c.hunt && !c.companion && c.activity !== 'meeting'
+    && c.activity !== 'sleep' && S.holdId !== c.id && distTiles(c, pl) < 22 && approachOk(c));
+  if (!cands.length) return;
+  const c = pick(cands);
+  const topic = Brain.approachTopic(c);
+  if (!topic) return;
+  c.approach = topic;
+  S.nextApproachT = S.t + 45 + S.rand() * 45;
+  leaveSpot(c);
+  c.busyUntil = 0; c.activity = null;
+  setPlan(c, { targetId: 'player', kind: 'approach', giveUpAt: S.t + 60 });
+}
+
+// すれ違いざまのひとこと
+function maybeRemark(c) {
+  const pl = S.player;
+  if (S.t < (c.nextRemarkT || 0) || c.moving && chance(0.5)) return;
+  if (!pl.alive || distTiles(c, pl) > 2.4 || c.inBed || isJailed(c) || c.hunt || !canSee(c, pl)) return;
+  c.nextRemarkT = S.t + 60 + S.rand() * 60;
+  if (!chance(0.55)) return;
+  const line = Brain.remarkLine(c);
+  if (line) say(c, line, 3.5);
 }
 
 function nearby(c, maxTiles, filter = () => true) {
@@ -669,6 +734,8 @@ function startActivity(c, plan) {
     case 'wander': c.busyUntil = S.t + 15 + S.rand() * 30; break;
     case 'rest': c.busyUntil = S.t + 40 + S.rand() * 30; break;
     case 'sit': case 'visit': c.busyUntil = S.t + 30 + S.rand() * 20; break;
+    case 'meeting': c.busyUntil = Math.max(S.t, S.meeting?.at || S.t) + 150; c.dir = c.y > FOUNTAIN_Y ? 'up' : 'down'; break;
+    case 'patrol': c.busyUntil = S.t + 15 + S.rand() * 15; break;
     case 'board': {
       c.busyUntil = S.t + 20; c.dir = 'up';
       const latest = S.board.find((p) => p.authorId === 'player' && !p.replies.some((r) => r.author === c.name) && S.t - p.postedT < 600);
@@ -696,7 +763,7 @@ function startActivity(c, plan) {
   }
   // 夜の遊びは21時半で切り上げて帰る
   const bed = Math.floor(S.t / 1440) * 1440 + 21.5 * 60;
-  if (act !== 'sleep' && act !== 'work' && !c.companion) c.busyUntil = Math.min(c.busyUntil, Math.max(bed, S.t + 5));
+  if (act !== 'sleep' && act !== 'work' && act !== 'meeting' && act !== 'patrol' && !c.companion) c.busyUntil = Math.min(c.busyUntil, Math.max(bed, S.t + 5));
 }
 
 function payCooks(n) {
@@ -720,13 +787,27 @@ export function interact(a, b, kind) {
   switch (kind) {
     case 'chat': {
       const rumor = pickRumor(a, b);
-      const [la, lb] = Brain.npcDialogue(a, b, rumor);
+      const [la, lb] = Wolf.chatLines(a, b) || Brain.npcDialogue(a, b, rumor);
       say(a, la);
       faceTo(b, a);
       setTimeout(() => b.alive && say(b, lb), 1400);
       addLike(a, b, 2 + a.p.sociability * 3); addLike(b, a, 2 + b.p.sociability * 2);
       shareRumor(a, b);
       a.busyUntil = S.t + 20; if (!b.isPlayer && S.t >= b.busyUntil && !b.companion) b.busyUntil = S.t + 20;
+      break;
+    }
+    case 'wolfArrest': Wolf.arrestSuspect(a, b); a.busyUntil = S.t + 20; break;
+    case 'approach': {
+      const tp = a.approach;
+      a.approach = null;
+      if (!tp || !b.isPlayer) break;
+      a.lastGreetDay = day();
+      say(a, tp.line, 8);
+      a.chatLog.push({ who: 'them', text: tp.line });
+      if (tp.pending) a.pending = { ...tp.pending, t: S.t };
+      S.callout = { id: a.id, text: tp.line, until: performance.now() + 10000 };
+      a.busyUntil = S.t + 25; a.activity = 'wait';
+      if (tp.note) Wolf.addNote(tp.note);
       break;
     }
     case 'greet':
@@ -788,6 +869,16 @@ export function giveToNpc(t, g) {
     else if (it === 'meteor') { like = 12; S.meteor.holder = t.id; S.meteor.state = 'held'; }
     else like = ITEMS[it].gift ? 8 : 12;
   }
+  if (t.quest && (g.item === t.quest.item) && S.t < t.quest.until) {
+    const n = t.quest.reward;
+    const pay = Math.min(n, Math.floor(t.coins));
+    t.coins -= pay; p.coins += pay;
+    like += 10; react = 'quest'; label = `${label}`;
+    toast(`✅ 頼まれごと達成！ ${t.name}から${pay}Gもらった`);
+    floatText(p, `+${pay}G`);
+    Wolf.addNote(`${t.name}の頼みごと（${ITEMS[t.quest.item]?.name || '食べ物'}）を果たした`);
+    t.quest = null;
+  }
   if (t.giftDay !== day()) { t.giftDay = day(); t.giftCount = 0; }
   like *= Math.pow(0.6, t.giftCount++);
   if (r.like < -20 && !['love', 'bribe', 'hungry'].includes(react)) react = 'suspicious';
@@ -832,6 +923,7 @@ function crime(actor, victim, type, noticed) {
     memo(w, `${actorN}が${dispName(victim)}に${wText}のを見た`, 'crime');
     if (w.key && w.postsToday < 4 && chance(0.25)) Brain.postAbout(w, 'witness', { actor: actorN, victim: dispName(victim), what2: wText });
   }
+  Wolf.onCrime(actor, ws);
   const reported = ws.some((w) => w.job === 'guard') || (ws.length > 0 && chance(0.6)) || (noticed && victim.p.honesty > 0.5 && chance(0.5));
   if (reported) S.wanted.add(actor.id);
   if (noticed && victim.key && victim.postsToday < 4 && chance(0.55)) Brain.postAbout(victim, 'victim', { actor: actorN, what: vText });
@@ -907,7 +999,7 @@ function doThreaten(a, b) {
   crime(a, b, 'threaten', true);
 }
 
-function jail(t, minutes) {
+export function jail(t, minutes) {
   t.jailedUntil = S.t + minutes; t.plan = null; t.path = []; t.activity = 'jail'; t.inBed = false;
   if (t.companion) endCompanion(t, false, true);
   for (const o of S.chars) if (o.companion && t.isPlayer) endCompanion(o, false, true);
@@ -959,7 +1051,7 @@ function shareRumor(a, b) {
 function removeItem(c, item) { const i = c.items.indexOf(item); if (i >= 0) c.items.splice(i, 1); }
 
 // ================= 生死 =================
-function die(c, cause) {
+export function die(c, cause, opts = {}) {
   if (!c.alive) return;
   c.alive = false; c.hp = 0; c.path = []; c.plan = null; c.companion = null;
   S.stats.deaths++; S.today.deaths++;
@@ -972,6 +1064,8 @@ function die(c, cause) {
     S.meteor.state = 'ground'; S.meteor.tx = n[0]; S.meteor.ty = n[1]; S.meteor.holder = null;
   }
   c.items = [];
+  if (c.isWolf) Wolf.reveal('death');
+  if (opts.silent) return;
   log(`${dispName(c)}が亡くなった（${cause}）。`, 'death');
   if (c.isPlayer) { S.over = true; S.gameOverReason = `あなたは${cause}で倒れた。`; return; }
   post('町役場', `【訃報】${c.name}さんが亡くなりました（${cause}）。`, { authorId: 'town' });
@@ -1128,6 +1222,7 @@ export function facilityActions(fid) {
     if (S.wanted.has('player')) acts.push({ id: 'surrender', label: '自首する（4時間の牢屋）' });
   }
   if (fid === 'lab' && p.items.includes('meteor')) acts.push({ id: 'research', label: '光る石を研究する（2時間）' });
+  if (S.clues?.[fid]) acts.unshift({ id: 'investigate', label: '🔍 事件の現場を調べる' });
   if (f.mine) acts.push({ id: 'sleep', label: '自分のベッドで朝まで寝る' });
   if (p.food > 0) acts.push({ id: 'eatown', label: `持っている食料を食べる（残り${p.food}）` });
   if (f.home && !f.mine) acts.push({ id: 'burgle', label: '家の中を物色する（盗み）' });
@@ -1187,6 +1282,12 @@ export function doFacility(fid, act) {
     case 'deposit': p.bank = (p.bank || 0) + Math.floor(p.coins); p.coins -= Math.floor(p.coins); toast(`タンスにしまった（${Math.floor(p.bank)}G）`); break;
     case 'withdraw': p.coins += p.bank; toast(`${Math.floor(p.bank)}Gを取り出した`); p.bank = 0; break;
     case 'eatown': eatOwnFood(); break;
+    case 'investigate': {
+      const text = Wolf.investigate(fid);
+      if (text) S.banner = { title: '🔍 現場の手がかり', text: text + '（手帳に書きとめた）', until: performance.now() + 9000 };
+      busy(15);
+      break;
+    }
     case 'buyfood': if (!playerSpend(3)) return; p.food++; toast('食料を1つ買った。'); break;
     case 'sellfood': p.food--; p.coins += 1; S.foodStock += 1; toast('食料を売った。+1G'); break;
     case 'stealcrop': {
@@ -1335,6 +1436,10 @@ export function applyTalkResult(t, r) {
       out.msgs.push(`🛒 ${t.name}から${s2.item === 'food' ? '食料' : ITEMS[s2.item].name}を${s2.price}Gで買った`);
     }
   }
+  if (r.note) Wolf.addNote(r.note);
+  if (r.meeting) { Wolf.scheduleMeeting('player', 60, 'player'); out.msgs.push('📣 1時間後に広場で話し合いが開かれる'); }
+  if (r.accused) S.wolf.playerAccused.add(r.accused);
+  if (r.quest) out.msgs.push(`📝 頼まれごと：${t.name}に${r.quest}を届ける（持ち物タブで確認）`);
   if (r.hire) { if (hirePlayer(t)) out.msgs.push(`${JOBS[t.job].icon} ${JOBS[t.job].name}になった！`); }
   if (r.close) out.close = true;
   switch (r.action) {
@@ -1362,6 +1467,11 @@ export function playerPost(text) {
     for (const n of names) addLike(o, n, (neg ? -7 : pos ? 5 : 0) * cred);
   }
   for (const n of names) if (n.alive) addLike(n, p, neg ? -18 : pos ? 8 : 1);
+  if (/(話し合|はなしあ|会議|集まって|集会)/.test(text)) Wolf.scheduleMeeting('player', 60, 'player');
+  if (S.wolfKnown && /(人狼|狼|犯人)/.test(text) && names.length && !/(じゃない|違う|無実)/.test(text)) {
+    for (const o of residents()) if (o.alive && !names.includes(o)) for (const n of names) Wolf.addSus(o, n.id, 12 * Wolf.trust(o, 'player'), '掲示板でよそ者が名指ししていた');
+    for (const n of names) { S.wolf.playerAccused.add(n.id); if (n.isWolf) S.wolf.playerThreat += 15; }
+  }
   const keys = residents().filter((o) => o.alive && o.key);
   const repliers = [...names.filter((n) => n.key && n.alive), ...keys.filter(() => chance(0.3))].slice(0, 2);
   const uniq = [...new Set(repliers)];

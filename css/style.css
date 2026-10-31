@@ -133,3 +133,24 @@ h1 { font-size: 44px; margin: 0; letter-spacing: 4px; color: #ffe9a0; text-shado
 .inv .nm { flex: 1; display: flex; flex-direction: column; }
 .inv .nm small { color: #aaa; font-size: 11px; line-height: 1.4; }
 .sub3 { font-size: 12px; color: #aaa; padding: 6px 0; }
+
+#tabs button { font-size: 12px; padding: 10px 0; }
+#callout { position: absolute; left: 50%; bottom: 48px; transform: translateX(-50%); max-width: 70%; background: rgba(255,250,235,.96); color: #2a2014; border: 2px solid #c8902a; border-radius: 10px; padding: 8px 14px; font-size: 14px; line-height: 1.5; animation: pop .25s; pointer-events: none; }
+#callout b { color: #8a4a10; margin-right: 4px; }
+#callout .k { display: block; font-size: 11px; color: #8a6a3a; margin-top: 2px; }
+#meeting { position: absolute; left: 12px; top: 56px; bottom: 56px; width: min(420px, 45%); background: rgba(16,20,14,.95); border: 1px solid #c8902a; border-radius: 10px; display: flex; flex-direction: column; overflow: hidden; }
+#meeting-head { padding: 8px 12px; background: #3a2a14; color: #ffe9a0; font-weight: bold; }
+#meeting-log { flex: 1; overflow-y: auto; padding: 8px 10px; font-size: 13px; }
+.ml { padding: 4px 0; line-height: 1.5; border-bottom: 1px dashed #2a3322; }
+.ml b { color: #ffd27a; margin-right: 6px; }
+.ml.me b { color: #ff9ab0; }
+.ml.vote { color: #bbb; font-size: 12px; border: none; padding: 1px 0; }
+.ml.result { color: #ffe9a0; font-weight: bold; text-align: center; padding: 8px 0; }
+#meeting-ctrl { padding: 8px; border-top: 1px solid #3a4a30; }
+#meeting-ctrl .row { display: flex; gap: 6px; margin: 4px 0; }
+#meeting-ctrl input { flex: 1; background: #11150d; color: #eee; border: 1px solid #3a4a30; border-radius: 6px; padding: 6px; font: inherit; font-size: 13px; }
+#meeting-ctrl .votes { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+#meeting-ctrl .votes button { background: #6a2a20; }
+#meeting-ctrl .votes button:hover { background: #8a3a28; }
+#meeting-ctrl button.ghost { background: #2c3824; }
+.wolf-reveal { font-size: 16px; color: #ffd0d0; }

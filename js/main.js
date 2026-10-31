@@ -2,9 +2,10 @@
 import { TILE, FACILITIES, BOARD_POS, JOBS, ITEMS, LAST_DAY, PLAZA } from './data.js';
 import { LLM } from './llm.js';
 import { walkable, facAt, roofedFacAt } from './world.js';
-import { S, day, timeStr, rel, residents, distTiles, isJailed, clamp, toast, log } from './state.js';
+import { S, day, timeStr, rel, residents, distTiles, isJailed, clamp, toast, log, say } from './state.js';
 import * as Sim from './sim.js';
 import * as Brain from './brain.js';
+import * as Wolf from './wolf.js';
 import { draw, view, resetRenderCache } from './render.js';
 
 const $ = (s) => document.querySelector(s);
@@ -101,6 +102,7 @@ window.addEventListener('keydown', (e) => {
     if (k === 'escape') closeMenu();
     if (k === 'p') setSpeed(S.paused ? 1 : 0);
     if (k === 'b') switchTab('board');
+    if (k === 'n') switchTab('notes');
     if (k === 'i') switchTab('items');
     if (k === 'm') view.showMinimap = !view.showMinimap;
     if (k === '-' ) view.zoom = clamp(view.zoom - 0.25, 0.75, 2.5);
@@ -182,13 +184,18 @@ function nearestThing() {
 
 function interactKey() {
   if (!S.player.alive || S.over) return;
+  if (S.callout && performance.now() < S.callout.until) {
+    const c = S.chars.find((x) => x.id === S.callout.id);
+    S.callout = null;
+    if (c && c.alive && distTiles(c, S.player) < 4) { closeMenu(); openChat(c); return; }
+  }
   if (menuFor) { closeMenu(); return; }
   if (Sim.playerBusy()) { toast('今は手が離せない。'); return; }
   const n = nearestThing();
   if (!n) { toast('近くに話せる人や入れる建物がない。'); return; }
   if (n.type === 'char') openCharMenu(n.target);
   else if (n.type === 'fac') openFacMenu(n.target);
-  else if (n.type === 'board') switchTab('board');
+  else if (n.type === 'board') openBoardMenu();
   else if (n.type === 'meteor') {
     const m = S.meteor;
     m.state = 'held'; m.holder = 'player'; S.player.items.push('meteor');
@@ -232,6 +239,24 @@ function openFacMenu(f) {
     b.disabled = !!a.disabled;
     if (/盗み|爆破/.test(a.label)) b.className = 'danger';
     b.onclick = () => { closeMenu(); if (a.id === 'report') openPicker(); else Sim.doFacility(f.id, a.id); };
+    m.appendChild(b);
+  });
+  m.hidden = false;
+}
+
+function openBoardMenu() {
+  menuFor = { type: 'board', id: 'board' };
+  const m = $('#menu');
+  m.innerHTML = '<h3>📋 広場の掲示板</h3>';
+  const acts = [
+    { label: '掲示板を読む・書き込む', fn: () => switchTab('board') },
+    { label: Wolf.meetingActive() ? '話し合いはもう呼びかけられている' : '📣 広場での話し合いを呼びかける（1時間後）', fn: () => Wolf.scheduleMeeting('player', 60, 'player'), disabled: Wolf.meetingActive() },
+  ];
+  acts.forEach((a, i) => {
+    const b = document.createElement('button');
+    b.innerHTML = `<span class="k">${i + 1}</span>${a.label}`;
+    b.disabled = !!a.disabled;
+    b.onclick = () => { closeMenu(); a.fn(); };
     m.appendChild(b);
   });
   m.hidden = false;
@@ -418,7 +443,7 @@ function updateUI() {
   const n = nearestThing();
   let hint = '';
   if (!menuFor && !Sim.playerBusy() && n) {
-    hint = n.type === 'char' ? `F：${n.target.name}と話す・行動` : n.type === 'fac' ? `F：${n.target.name}でできること` : n.type === 'board' ? 'F：掲示板を見る' : 'F：光る石を拾う';
+    hint = n.type === 'char' ? `F：${n.target.name}と話す・行動` : n.type === 'fac' ? `F：${n.target.name}でできること` : n.type === 'board' ? 'F：掲示板（話し合いの呼びかけ）' : 'F：光る石を拾う';
   }
   const followers = S.chars.filter((c) => c.companion);
   if (followers.length) hint += (hint ? '　' : '') + `🤝 ${followers.map((c) => c.name).join('・')}が同行中`;
@@ -443,6 +468,9 @@ function updateUI() {
   if (currentTab === 'people') renderPeople();
   if (currentTab === 'board') renderBoard();
   if (currentTab === 'log') renderLog();
+  if (currentTab === 'notes') renderNotes();
+  updateCallout();
+  updateMeetingPanel();
   if (chatTarget) updateChatRel();
 }
 
@@ -506,7 +534,7 @@ function renderPeople() {
   const list = residents().slice().sort((a, b) => (b.alive - a.alive) || (b.key - a.key));
   $('#tab-people').innerHTML = list.map((c) => {
     const r = rel(c, p);
-    const st = !c.alive ? '🪦' : isJailed(c) ? '🔒' : S.wanted.has(c.id) ? '🚨' : c.companion ? '🤝' : c.activity === 'sleep' ? '💤' : '';
+    const st = c.undiscovered ? '' : !c.alive ? (c.killedBy ? '🐺🪦' : '🪦') : c.jailedAsWolf ? '🔒人狼の疑い' : isJailed(c) ? '🔒' : S.wanted.has(c.id) ? '🚨' : c.companion ? '🤝' : c.activity === 'sleep' ? '💤' : '';
     const likeW = Math.abs(r.like);
     const detail = expanded === c.id ? `<div class="detail">
       ${c.persona ? esc(c.persona) + '<br>' : ''}
@@ -517,7 +545,7 @@ function renderPeople() {
       ${c.items.length ? '<br>持ち物：' + c.items.map((i) => ITEMS[i].name).join('、') : ''}
       <br>記憶：${c.memory.slice(-3).map(esc).join(' / ') || 'なし'}
     </div>` : '';
-    return `<div class="person ${c.alive ? '' : 'dead'}" data-id="${c.id}">
+    return `<div class="person ${c.alive || c.undiscovered ? '' : 'dead'}" data-id="${c.id}">
       <div class="top"><span>${c.name} <small>${JOBS[c.job].icon}${JOBS[c.job].name}</small></span><span>${st}</span></div>
       <div class="relbar">好感<div class="meter"><i style="width:${likeW}%;background:${r.like >= 0 ? '#6ac060' : '#d05050'}"></i></div>${Math.round(r.like)}
       　恐怖<div class="meter"><i style="width:${r.fear}%;background:#a070d0"></i></div>${Math.round(r.fear)}</div>
@@ -537,6 +565,70 @@ function renderBoard() {
       <div class="text">${esc(p.text)}</div>
       ${p.replies.map((r) => `<div class="reply"><b>${esc(r.author)}</b>：${esc(r.text)}</div>`).join('')}
     </div>`).join('');
+}
+
+function updateCallout() {
+  const el = $('#callout');
+  const co = S.callout;
+  if (co && performance.now() > co.until) {
+    const c = S.chars.find((x) => x.id === co.id);
+    if (c && c.alive && !chatTarget) { c.busyUntil = S.t; if (c.activity === 'wait') c.activity = null; say(c, pick2(['……まあ、いいや。', '……忙しそうだね。'])); }
+    S.callout = null;
+  }
+  if (S.callout && !chatTarget) {
+    const c = S.chars.find((x) => x.id === S.callout.id);
+    const html = `<b>${esc(c?.name || '')}</b>「${esc(S.callout.text)}」<span class="k">F：返事をする</span>`;
+    if (el._h !== html) { el.innerHTML = html; el._h = html; }
+    el.hidden = false;
+  } else el.hidden = true;
+}
+const pick2 = (a) => a[Math.floor(Math.random() * a.length)];
+
+// ---------- 話し合い ----------
+let meetingSig = '';
+function updateMeetingPanel() {
+  const m = S.meeting;
+  const el = $('#meeting');
+  const show = m && (m.playerIn && ['talking', 'voting'].includes(m.state) || (m.state === 'done' && m.playerIn && !m.closed));
+  if (!show) { el.hidden = true; return; }
+  el.hidden = false;
+  const sig = m.state + ':' + m.log.length;
+  if (sig === meetingSig) return;
+  meetingSig = sig;
+  const present = m.present.map((id) => S.chars.find((c) => c.id === id)).filter(Boolean);
+  $('#meeting-head').textContent = `📣 広場の話し合い（${present.length}人参加）`;
+  $('#meeting-log').innerHTML = m.log.map((l) => `<div class="ml ${l.cls}">${l.who ? `<b>${esc(l.who)}</b>` : ''}${esc(l.text)}</div>`).join('');
+  $('#meeting-log').scrollTop = 1e9;
+  const ctrl = $('#meeting-ctrl');
+  if (m.state === 'talking') {
+    ctrl.innerHTML = `<div class="row"><input id="meeting-text" placeholder="発言する（例：ゴウが夜中に出歩いてるのを見た／ハルは人狼じゃない）" maxlength="60"><button id="meeting-say">言う</button></div>
+      <div class="row"><button id="meeting-vote">投票に進む</button><button id="meeting-leave" class="ghost">その場を離れる</button></div>`;
+    const sayIt = () => { const v = $('#meeting-text').value.trim(); if (v) { Wolf.playerSpeak(v); $('#meeting-text').value = ''; meetingSig = ''; } };
+    $('#meeting-say').onclick = sayIt;
+    $('#meeting-text').onkeydown = (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); sayIt(); } };
+    $('#meeting-vote').onclick = () => { Wolf.startVoteNow(); meetingSig = ''; };
+    $('#meeting-leave').onclick = () => { Wolf.leaveMeeting(); meetingSig = ''; };
+  } else if (m.state === 'voting') {
+    const cands = Wolf.voteCandidates().filter((c) => !c.isPlayer);
+    ctrl.innerHTML = '<div class="sub2">誰を牢屋に入れる？（あなたの一票）</div><div class="votes">' +
+      cands.map((c) => `<button data-v="${c.id}">${esc(c.name)}</button>`).join('') + '<button data-v="abstain" class="ghost">棄権</button></div>';
+    ctrl.querySelectorAll('[data-v]').forEach((b) => b.onclick = () => { Wolf.vote(b.dataset.v); meetingSig = ''; });
+  } else {
+    ctrl.innerHTML = '<button id="meeting-close">閉じる</button>';
+    $('#meeting-close').onclick = () => { m.closed = true; meetingSig = ''; updateMeetingPanel(); };
+  }
+}
+
+function renderNotes() {
+  const quests = residents().filter((c) => c.alive && c.quest && S.t < c.quest.until);
+  const m = S.meeting;
+  let html = '';
+  if (m && m.state === 'planned') html += `<div class="box"><h4>📣 予定</h4>${Math.floor((m.at % 1440) / 60)}時に広場で話し合い</div>`;
+  if (quests.length) html += '<div class="box"><h4>📝 頼まれごと</h4>' + quests.map((c) => `${esc(c.name)}に<b>${esc(c.quest.label)}</b>を届ける（お礼${c.quest.reward}G）`).join('<br>') + '</div>';
+  html += '<div class="box"><h4>📓 手帳（見聞きしたこと）</h4>' + (S.notes.length ? S.notes.map((n) => `<div class="logline"><span class="tm">${n.day}日目 ${n.time}</span>${esc(n.text)}</div>`).join('')
+    : '<div class="sub3">まだ何も書いていない。住民の証言や現場の手がかりがここにたまっていく。</div>') + '</div>';
+  html += '<div class="box keys2">聞き込みのコツ：「昨日の夜どこにいた？」「人狼は誰だと思う？」「〇〇は昨日の夜どこにいた？」「〇〇が人狼だと思う」「話し合おう」</div>';
+  if ($('#tab-notes')._h !== html) { $('#tab-notes').innerHTML = html; $('#tab-notes')._h = html; }
 }
 
 function renderLog() {
@@ -565,11 +657,14 @@ function showResult() {
   else if (st.crimes <= 10 && st.deaths === 0) verdict = '平和な町';
   else if (inf.ratio >= 0.5) verdict = inf.fear > inf.sup ? 'あなたが恐怖で支配する町' : 'あなたを慕う町';
   else verdict = 'ふつうの町';
+  if (S.wolf?.confirmed && p.alive) verdict = S.wolf.playerAccused.has(S.wolf.id) ? 'あなたが人狼を暴いた町' : '人狼を退けた町';
+  else if (S.wolf && S.wolf.kills.length >= 4) verdict = '人狼に怯え続けた町';
   $('#result-box').innerHTML = `
     <h2>${p.alive ? `${LAST_DAY}日間が過ぎた` : 'ゲームオーバー'}</h2>
     ${S.gameOverReason ? `<p>${esc(S.gameOverReason)}</p>` : ''}
     <div class="big-title">「${verdict}」</div>
     <p>あなたの立場：<b>${Sim.titleFor(inf)}</b>（影響力 ${Math.round(inf.ratio * 100)}%）</p>
+    <p class="wolf-reveal">🐺 人狼の正体は <b>${esc(Wolf.wolfChar()?.name || '?')}</b> でした。${S.wolf?.confirmed ? '町は人狼を突き止めた！' : '人狼は最後まで正体を隠し通した……'}（犠牲者 ${S.wolf?.kills.length || 0}人）</p>
     <table>
       <tr><td>生き残った住民</td><td>${alive} / ${total}人</td></tr>
       <tr><td>事件の数</td><td>${st.crimes}件</td></tr>

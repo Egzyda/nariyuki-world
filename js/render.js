@@ -416,7 +416,7 @@ export function draw(ctx, w, h, dt) {
   }
 
   // 墓
-  for (const c of S.chars) if (!c.alive && !c.isPlayer) {
+  for (const c of S.chars) if (!c.alive && !c.isPlayer && !c.undiscovered) {
     const gx = c.gx ?? c.x, gy = c.gy ?? c.y;
     ctx.fillStyle = '#8a8a90'; ctx.fillRect(gx - 7, gy - 12, 14, 18); ctx.fillStyle = '#a8a8ae'; ctx.fillRect(gx - 7, gy - 12, 14, 3);
     ctx.fillStyle = '#5a5a60'; ctx.fillRect(gx - 1, gy - 9, 2, 9); ctx.fillRect(gx - 4, gy - 7, 8, 2);

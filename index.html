@@ -15,6 +15,7 @@
     <p class="sub">AI住民たちと暮らす、成り行きまかせの町</p>
     <p class="desc">
       あなたは町にやってきた「よそ者」。所持金は3G。<br>
+      ……この町の住民の中に、ひとり<b>人狼</b>がまぎれている。<br>
       働いて仲良く暮らすのも、盗んで殴ってのし上がるのも、口先で住民を操るのも自由。<br>
       住民たちは自分で考え、噂し、掲示板に書き込み、ときに裏切ります。<br>
       15日後、この町はどうなっているでしょうか。
@@ -47,6 +48,12 @@
     <div id="busy" hidden></div>
     <div id="hint"></div>
     <div id="banner" hidden></div>
+    <div id="callout" hidden></div>
+    <div id="meeting" hidden>
+      <div id="meeting-head"></div>
+      <div id="meeting-log"></div>
+      <div id="meeting-ctrl"></div>
+    </div>
   </div>
   <aside id="side">
     <nav id="tabs">
@@ -54,6 +61,7 @@
       <button data-tab="items">持ち物</button>
       <button data-tab="people">住民</button>
       <button data-tab="board">掲示板 <span id="board-new"></span></button>
+      <button data-tab="notes">手帳</button>
       <button data-tab="log">記録</button>
     </nav>
     <section id="tab-status" class="tab on"></section>
@@ -66,6 +74,7 @@
       </div>
       <div id="board-list"></div>
     </section>
+    <section id="tab-notes" class="tab"></section>
     <section id="tab-log" class="tab"></section>
     <div id="speed">
       <button data-speed="0">⏸</button>
