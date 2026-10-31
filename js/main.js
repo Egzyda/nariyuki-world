@@ -1,11 +1,11 @@
 // 起動・入力・UI
-import { TILE, MAP_W, MAP_H, FACILITIES, BOARD_POS, JOBS, ITEMS, LAST_DAY } from './data.js';
+import { TILE, FACILITIES, BOARD_POS, JOBS, ITEMS, LAST_DAY, PLAZA } from './data.js';
 import { LLM } from './llm.js';
-import { walkable } from './world.js';
+import { walkable, facAt, roofedFacAt } from './world.js';
 import { S, day, timeStr, rel, residents, distTiles, isJailed, clamp, toast, log } from './state.js';
 import * as Sim from './sim.js';
 import * as Brain from './brain.js';
-import { draw } from './render.js';
+import { draw, view, resetRenderCache } from './render.js';
 
 const $ = (s) => document.querySelector(s);
 const cv = $('#cv');
@@ -16,6 +16,8 @@ let chatTarget = null;
 let currentTab = 'status';
 let lastBoardSeen = 0;
 let expanded = null;
+
+const PLAYER_SPEED = 230;   // px/秒（Shiftで1.6倍）
 
 // ---------- タイトル ----------
 (async function setupTitle() {
@@ -50,26 +52,29 @@ $('#start').onclick = async () => {
 
 function startGame() {
   Sim.initGame(Date.now());
+  resetRenderCache();
   $('#title').hidden = true;
   $('#result').hidden = true;
   $('#game').hidden = false;
   resize();
   lastBoardSeen = S.postSeq;
-  if (LLM.available()) toast('住民たちはAIで考えて動きます。話しかけてみよう。');
-  else toast('Eキーで住民に話しかけたり、施設に入ったりできます。');
+  view.camX = S.player.x - cv.width / view.zoom / 2;
+  view.camY = S.player.y - cv.height / view.zoom / 2;
+  toast('WASD/矢印で移動（Shiftで走る）。人や建物の中で F キー。');
+  if (LLM.available()) toast('住民はAIで話します。自由に話しかけてみよう。');
 }
 
 // ---------- ループ ----------
 let last = performance.now();
 let uiTimer = 0;
 function loop(now) {
-  const dt = (now - last) / 1000; last = now;
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
   if (!$('#game').hidden && S.player) {
     movePlayer(dt);
     Sim.update(dt);
-    draw(ctx, cv.width, cv.height);
+    draw(ctx, cv.width, cv.height, dt);
     uiTimer -= dt;
-    if (uiTimer <= 0) { uiTimer = 0.35; updateUI(); }
+    if (uiTimer <= 0) { uiTimer = 0.3; updateUI(); }
     updateToasts();
     if (S.over && $('#result').hidden) showResult();
   }
@@ -80,6 +85,7 @@ requestAnimationFrame(loop);
 function resize() {
   const r = $('#stage').getBoundingClientRect();
   cv.width = Math.floor(r.width); cv.height = Math.floor(r.height);
+  view.zoom = clamp(Math.round((Math.min(cv.width, cv.height * 1.3) / 700) * 4) / 4, 1, 2);
 }
 window.addEventListener('resize', resize);
 
@@ -90,19 +96,24 @@ window.addEventListener('keydown', (e) => {
   if (!chatTarget && $('#picker').hidden) {
     const k = e.key.toLowerCase();
     keys.add(k);
-    if (k === 'e' || k === ' ') { e.preventDefault(); interactKey(); }
+    if (k === 'f' || k === ' ') { e.preventDefault(); if (!e.repeat) interactKey(); }
     if (k === 'escape') closeMenu();
     if (k === 'p') setSpeed(S.paused ? 1 : 0);
     if (k === 'b') switchTab('board');
+    if (k === 'm') view.showMinimap = !view.showMinimap;
+    if (k === '-' ) view.zoom = clamp(view.zoom - 0.25, 0.75, 2.5);
+    if (k === '=' || k === '+' || k === ';') view.zoom = clamp(view.zoom + 0.25, 0.75, 2.5);
     if (/^[1-9]$/.test(k) && menuFor) { const b = $('#menu').querySelectorAll('button')[+k - 1]; if (b && !b.disabled) b.click(); }
     if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) e.preventDefault();
   } else if (e.key === 'Escape') { closeChat(); closePicker(); }
 });
 window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 window.addEventListener('blur', () => keys.clear());
+cv.addEventListener('wheel', (e) => { e.preventDefault(); view.zoom = clamp(view.zoom + (e.deltaY < 0 ? 0.25 : -0.25), 0.75, 2.5); }, { passive: false });
 
 function movePlayer(dt) {
   const p = S.player;
+  p.moving = false;
   if (!p.alive || S.paused || chatTarget || S.over) return;
   if (Sim.playerBusy()) return;
   let vx = 0, vy = 0;
@@ -112,39 +123,58 @@ function movePlayer(dt) {
   if (keys.has('d') || keys.has('arrowright')) vx += 1;
   if (!vx && !vy) return;
   const len = Math.hypot(vx, vy);
-  const sp = 150 * (p.hunger < 15 ? 0.6 : 1) * dt;
+  const run = keys.has('shift') ? 1.6 : 1;
+  const sp = PLAYER_SPEED * run * (p.hunger < 15 ? 0.6 : 1) * dt;
+  const x0 = p.x, y0 = p.y;
   tryMove(p, (vx / len) * sp, 0);
   tryMove(p, 0, (vy / len) * sp);
+  p.dir = Math.abs(vx) > Math.abs(vy) ? (vx > 0 ? 'right' : 'left') : (vy > 0 ? 'down' : vy < 0 ? 'up' : p.dir);
+  const moved = Math.hypot(p.x - x0, p.y - y0);
+  if (moved > 0) { p.moving = true; p.anim += moved * 0.8; p.spot = null; }
   if (p.activity && p.activity !== 'sleep') p.activity = null;
   if (menuFor) {
     const t = menuFor.type === 'char' ? S.chars.find((c) => c.id === menuFor.id) : null;
-    const far = t ? distTiles(p, t) > 2.2 : menuFor.type === 'fac' ? distToDoor(menuFor.id) > 1.8 : false;
+    const far = t ? distTiles(p, t) > 2.2 : menuFor.type === 'fac' ? currentFacility()?.id !== menuFor.id : false;
     if (far) closeMenu();
   }
 }
 
-function tryMove(c, dx, dy) {
-  const nx = c.x + dx, ny = c.y + dy, r = 9;
-  for (const [ox, oy] of [[-r, -r], [r, -r], [-r, r], [r, r]]) {
-    if (!walkable(Math.floor((nx + ox) / TILE), Math.floor((ny + oy) / TILE))) return;
+const R = 8;
+function blocked(x, y) {
+  for (const [ox, oy] of [[-R, -R + 6], [R, -R + 6], [-R, R], [R, R]]) {
+    if (!walkable(Math.floor((x + ox) / TILE), Math.floor((y + oy) / TILE))) return true;
   }
-  c.x = nx; c.y = ny;
+  return false;
+}
+function tryMove(c, dx, dy) {
+  if (!dx && !dy) return;
+  const nx = c.x + dx, ny = c.y + dy;
+  if (!blocked(nx, ny)) { c.x = nx; c.y = ny; return; }
+  // 角に引っかかったら、通路の中心へ少し寄せる（入口を通りやすく）
+  if (dy) {
+    const cx = Math.floor(c.x / TILE) * TILE + TILE / 2;
+    const off = cx - c.x;
+    if (Math.abs(off) < 14 && !blocked(cx, ny)) c.x += Math.sign(off) * Math.min(Math.abs(off), Math.abs(dy) + 1);
+  } else {
+    const cy = Math.floor(c.y / TILE) * TILE + TILE / 2;
+    const off = cy - c.y;
+    if (Math.abs(off) < 14 && !blocked(nx, cy)) c.y += Math.sign(off) * Math.min(Math.abs(off), Math.abs(dx) + 1);
+  }
 }
 
-function distToDoor(fid) {
-  const f = FACILITIES.find((x) => x.id === fid);
-  return Math.hypot(S.player.x - (f.door[0] * TILE + 16), S.player.y - (f.door[1] * TILE + 16)) / TILE;
-}
+function playerTile() { return [Math.floor(S.player.x / TILE), Math.floor(S.player.y / TILE)]; }
+function currentFacility() { const [x, y] = playerTile(); return facAt(x, y); }
 
 function nearestThing() {
   const p = S.player;
-  const chars = S.chars.filter((c) => c !== p && c.alive && !isJailed(c) && distTiles(p, c) <= 1.7).sort((a, b) => distTiles(p, a) - distTiles(p, b));
+  const chars = S.chars.filter((c) => c !== p && c.alive && !isJailed(c) && distTiles(p, c) <= 1.6 && Sim.canSee(p, c))
+    .sort((a, b) => distTiles(p, a) - distTiles(p, b));
   if (chars.length) return { type: 'char', target: chars[0] };
   const m = S.meteor;
   if (m && m.state === 'ground' && Math.hypot(p.x - (m.tx * TILE + 16), p.y - (m.ty * TILE + 16)) / TILE < 1.4) return { type: 'meteor' };
-  const fac = FACILITIES.map((f) => ({ f, d: distToDoor(f.id) })).filter((x) => x.d < 1.3).sort((a, b) => a.d - b.d)[0];
-  if (fac) return { type: 'fac', target: fac.f };
   if (Math.hypot(p.x - (BOARD_POS[0] * TILE + 16), p.y - (BOARD_POS[1] * TILE + 16)) / TILE < 1.6) return { type: 'board' };
+  const f = currentFacility();
+  if (f) return { type: 'fac', target: f };
   return null;
 }
 
@@ -153,7 +183,7 @@ function interactKey() {
   if (menuFor) { closeMenu(); return; }
   if (Sim.playerBusy()) { toast('今は手が離せない。'); return; }
   const n = nearestThing();
-  if (!n) return;
+  if (!n) { toast('近くに話せる人や入れる建物がない。'); return; }
   if (n.type === 'char') openCharMenu(n.target);
   else if (n.type === 'fac') openFacMenu(n.target);
   else if (n.type === 'board') switchTab('board');
@@ -171,7 +201,7 @@ function openCharMenu(t) {
   const r = rel(t, S.player);
   const acts = Sim.charActions(t);
   const m = $('#menu');
-  m.innerHTML = `<h3>${t.key ? '★' : ''}${t.name}（${JOBS[t.job].name}）</h3><div class="sub2">好感度 ${Math.round(r.like)} ／ 恐怖 ${Math.round(r.fear)}${S.wanted.has(t.id) ? ' ／ <span class="wanted">手配中</span>' : ''}</div>`;
+  m.innerHTML = `<h3>${t.key ? '★' : ''}${t.name}（${JOBS[t.job].name}）</h3><div class="sub2">好感度 ${Math.round(r.like)} ／ 恐怖 ${Math.round(r.fear)}${S.wanted.has(t.id) ? ' ／ <span class="wanted">手配中</span>' : ''}${t.companion ? ' ／ 🤝同行中' : ''}</div>`;
   acts.forEach((a, i) => {
     const b = document.createElement('button');
     b.innerHTML = `<span class="k">${i + 1}</span>${a.label}`;
@@ -207,17 +237,27 @@ function openFacMenu(f) {
 function closeMenu() { menuFor = null; $('#menu').hidden = true; }
 
 // ---------- 会話 ----------
+const SUGGEST = ['こんにちは', '何してるの？', '食堂に行こうよ', '酒場で一杯どう？', '最近なにかあった？', '仕事ってある？', 'ついてきて'];
+
 function openChat(t) {
   chatTarget = t;
   S.paused = true;
   $('#chat').hidden = false;
-  $('#chat-name').textContent = (t.key ? '★' : '') + t.name;
+  $('#chat-name').textContent = (t.key ? '★' : '') + t.name + `（${JOBS[t.job].name}）`;
   $('#chat-log').innerHTML = '';
   for (const h of t.chatLog.slice(-10)) addMsg(h.who === 'player' ? 'me' : 'them', h.text);
-  if (!t.chatLog.length) addMsg('sys', `${t.name}（${JOBS[t.job].name}）に話しかけた。`);
+  if (!t.chatLog.length) addMsg('sys', `${t.name}に話しかけた。`);
   $('#chat-note').textContent = LLM.available()
-    ? (t.key ? 'AI住民と自由に会話できます。お願い・交渉・嘘・噂の吹き込みもどうぞ。' : 'この住民はシンプルな受け答えをします（★の住民はAIで会話）。')
-    : 'AIなしモード：キーワードに反応します（例：「お金ちょうだい」「○○は泥棒だよ」「ありがとう」）';
+    ? 'AIが口調をつけて返事します。誘う・頼む・噂を吹き込む・場所を聞く…なんでもどうぞ。'
+    : '例：「食堂に行こうよ」「〇〇ってどんな人？」「研究所はどこ？」「おごるよ」「ついてきて」';
+  const chips = $('#chat-chips');
+  chips.innerHTML = '';
+  for (const s of SUGGEST) {
+    const b = document.createElement('button');
+    b.textContent = s;
+    b.onclick = () => { $('#chat-text').value = s; sendChat(); };
+    chips.appendChild(b);
+  }
   updateChatRel();
   setTimeout(() => $('#chat-text').focus(), 50);
 }
@@ -245,23 +285,32 @@ async function sendChat() {
   $('#chat-text').value = '';
   addMsg('me', text);
   const typingEl = addMsg('them typing', '…');
-  const r = await Brain.talk(t, text, t.chatLog, t.key);
+  let r;
+  try { r = await Brain.talk(t, text, t.chatLog); } catch (e) { console.error(e); r = { say: '……？', action: 'none', like: 0 }; }
   typingEl.remove();
+  if (chatTarget !== t) { chatBusy = false; return; }
   t.chatLog.push({ who: 'player', text }, { who: 'them', text: r.say });
   if (t.chatLog.length > 20) t.chatLog.splice(0, 2);
   addMsg('them', r.say);
   const out = Sim.applyTalkResult(t, r);
-  if (typeof out === 'string') { addMsg('sys', out); toast(out); }
-  if (r.like >= 5) addMsg('sys', `（${t.name}の好感度が上がった）`);
+  for (const m of out.msgs) { addMsg('sys', m); toast(m); }
+  if (r.like >= 3) addMsg('sys', `（${t.name}の好感度が上がった）`);
   if (r.like <= -5) addMsg('sys', `（${t.name}の好感度が下がった）`);
   if (r.belief) addMsg('sys', `（${t.name}の${r.belief.target}への見方が${r.belief.like < 0 ? '悪く' : '良く'}なったようだ）`);
   updateChatRel();
   chatBusy = false;
-  if (out && out.attack) { addMsg('sys', `${t.name}が殴りかかってきた！`); setTimeout(() => { closeChat(); Sim.interact(t, S.player, 'attack'); }, 900); }
-  if (out && out.flee) { addMsg('sys', `${t.name}は立ち去った。`); setTimeout(closeChat, 900); }
+  if (out.attack) { addMsg('sys', `${t.name}が殴りかかってきた！`); setTimeout(() => { closeChat(); Sim.interact(t, S.player, 'attack'); }, 900); return; }
+  if (out.flee) { addMsg('sys', `${t.name}は立ち去った。`); setTimeout(closeChat, 900); return; }
+  if (out.close) setTimeout(() => { if (chatTarget === t) closeChat(); }, 1300);
 }
 
-function closeChat() { chatTarget = null; $('#chat').hidden = true; S.paused = $('#speed .on')?.dataset.speed === '0'; }
+function closeChat() {
+  if (chatTarget && chatTarget.chatLog.length) {
+    const last = chatTarget.chatLog[chatTarget.chatLog.length - 1];
+    if (last.who === 'them') chatTarget.bubble = { text: last.text, until: performance.now() + 2500 };
+  }
+  chatTarget = null; $('#chat').hidden = true; S.paused = $('#speed .on')?.dataset.speed === '0';
+}
 
 $('#chat-send').onclick = sendChat;
 $('#chat-text').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); sendChat(); } });
@@ -310,22 +359,33 @@ $('#post-btn').onclick = () => {
 const meter = (v, max, color) => `<div class="meter"><i style="width:${clamp(v / max * 100, 0, 100)}%;background:${color}"></i></div>`;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+function whereText() {
+  const [x, y] = playerTile();
+  const f = facAt(x, y);
+  if (f) return f.name + (roofedFacAt(x, y) || f.kind === 'field' ? '' : 'の入口');
+  if (x >= PLAZA.x && x < PLAZA.x + PLAZA.w && y >= PLAZA.y && y < PLAZA.y + PLAZA.h) return '広場';
+  return '町の通り';
+}
+
 let boardSig = '';
 function updateUI() {
   const p = S.player;
   if (!p) return;
-  $('#hud').innerHTML = `<b>${day()}日目</b> ${timeStr()}　残り${Math.max(0, LAST_DAY - day())}日${S.paused && !chatTarget ? '　⏸ 一時停止中' : ''}${S.droughtUntilDay >= day() ? '　☀️日照り' : ''}`;
+  $('#hud').innerHTML = `<b>${day()}日目</b> ${timeStr()}　残り${Math.max(0, LAST_DAY - day())}日　📍${whereText()}${S.paused && !chatTarget ? '　⏸ 一時停止中' : ''}${S.droughtUntilDay >= day() ? '　☀️日照り' : ''}`;
 
   const n = nearestThing();
   let hint = '';
   if (!menuFor && !Sim.playerBusy() && n) {
-    hint = n.type === 'char' ? `E：${n.target.name}` : n.type === 'fac' ? `E：${n.target.name}に入る` : n.type === 'board' ? 'E：掲示板を見る' : 'E：光る石を拾う';
+    hint = n.type === 'char' ? `F：${n.target.name}と話す・行動` : n.type === 'fac' ? `F：${n.target.name}でできること` : n.type === 'board' ? 'F：掲示板を見る' : 'F：光る石を拾う';
   }
+  const followers = S.chars.filter((c) => c.companion);
+  if (followers.length) hint += (hint ? '　' : '') + `🤝 ${followers.map((c) => c.name).join('・')}が同行中`;
   $('#hint').textContent = hint;
   const busyEl = $('#busy');
   if (p.alive && Sim.playerBusy()) {
     busyEl.hidden = false;
-    busyEl.textContent = isJailed(p) ? '🔒 牢屋の中…（時間が早く進みます）' : p.activity === 'sleep' ? '💤 眠っている…' : p.activity === 'research' ? '🔬 研究中…' : p.activity === 'work' ? '⚒️ 働いている…' : p.activity === 'train' ? '💪 鍛えている…' : '…';
+    const A = { sleep: '💤 眠っている…', research: '🔬 研究中…', work: '⚒️ 働いている…', train: '💪 鍛えている…', eat: '🍴 食事中…', drink: '🍺 飲んでいる…', heal: '🩹 治療中…' };
+    busyEl.textContent = isJailed(p) ? '🔒 牢屋の中…（時間が早く進みます）' : A[p.activity] || '…';
   } else busyEl.hidden = true;
 
   const newPosts = S.postSeq - lastBoardSeen;
@@ -361,7 +421,11 @@ function renderStatus() {
       事件：${S.stats.crimes}件 ／ 死者：${S.stats.deaths}人 ／ 逮捕：${S.stats.arrests}件
       ${S.meteor ? `<br>光る石：${S.meteor.state === 'ground' ? '地面に落ちている' : S.meteor.state === 'done' ? ITEMS[S.meteor.result].name + 'だった' : '誰かが持っている'}` : ''}
     </div>
-    <div class="box" style="font-size:12px;color:#aaa">E：話す・入る　B：掲示板　P：一時停止<br>夜に寝る場所：空き家（右下）か酒場</div>`;
+    <div class="box keys2">
+      <b>F</b>：話す・建物でできること　<b>Shift</b>：走る<br>
+      <b>B</b>：掲示板　<b>P</b>：一時停止　<b>M</b>：地図　<b>ホイール / − =</b>：拡大縮小<br>
+      建物にはそのまま歩いて入れます。夜は空き家（右下）か酒場で寝よう。
+    </div>`;
   const ub = $('#tab-status [data-use]');
   if (ub) ub.onclick = () => Sim.useItem(S.player, ub.dataset.use);
 }
@@ -371,10 +435,11 @@ function renderPeople() {
   const list = residents().slice().sort((a, b) => (b.alive - a.alive) || (b.key - a.key));
   $('#tab-people').innerHTML = list.map((c) => {
     const r = rel(c, p);
-    const st = !c.alive ? '🪦' : isJailed(c) ? '🔒' : S.wanted.has(c.id) ? '🚨' : c.activity === 'sleep' ? '💤' : '';
+    const st = !c.alive ? '🪦' : isJailed(c) ? '🔒' : S.wanted.has(c.id) ? '🚨' : c.companion ? '🤝' : c.activity === 'sleep' ? '💤' : '';
     const likeW = Math.abs(r.like);
     const detail = expanded === c.id ? `<div class="detail">
       ${c.persona ? esc(c.persona) + '<br>' : ''}
+      いる場所：${c.alive ? esc(Brain.locName(c)) : '―'}<br>
       ${c.intent?.thought ? `今日の心の声：「${esc(c.intent.thought)}」<br>` : ''}
       体力${Math.round(c.hp)} 満腹${Math.round(c.hunger)} 所持金${Math.floor(c.coins)}G
       ${c.items.length ? '<br>持ち物：' + c.items.map((i) => ITEMS[i].name).join('、') : ''}
@@ -449,4 +514,5 @@ function showResult() {
 }
 
 // デバッグ用
-window.NW = { S, Sim };
+window.NW = { S, Sim, Brain, view };
+void FACILITIES;

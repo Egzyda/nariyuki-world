@@ -4,6 +4,7 @@
 export const MODELS = {
   'webllm-small': { label: 'ブラウザ内AI（軽量 1.5B / 約1GB）', id: 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC' },
   'webllm-std':   { label: 'ブラウザ内AI（標準 3B / 約2GB）',   id: 'Qwen2.5-3B-Instruct-q4f16_1-MLC' },
+  'webllm-large': { label: 'ブラウザ内AI（高品質 7B / 約5GB）', id: 'Qwen2.5-7B-Instruct-q4f16_1-MLC' },
 };
 
 export const LLM = {

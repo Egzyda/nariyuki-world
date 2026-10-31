@@ -1,8 +1,9 @@
 // Cloudflare Pages Functions: /api/chat
 // Workers AI をバインド（変数名 AI）すると、タイトル画面に「クラウドAI」が選べるようになる。
 // 設定: Pages プロジェクト > 設定 > バインディング > Workers AI を追加（変数名: AI）
+// 使うモデルは環境変数 AI_MODEL で変更できる（日本語が得意なモデルほど会話が自然になる）。
 
-const MODEL = '@cf/meta/llama-3.1-8b-instruct';
+const DEFAULT_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 
 export async function onRequestGet({ env }) {
   return Response.json({ ai: !!env.AI });
@@ -17,7 +18,7 @@ export async function onRequestPost({ request, env }) {
   const max_tokens = Math.min(Number(body.max_tokens) || 160, 300);
   const temperature = Math.min(Math.max(Number(body.temperature) || 0.8, 0), 1.5);
   try {
-    const r = await env.AI.run(MODEL, { messages, max_tokens, temperature });
+    const r = await env.AI.run(env.AI_MODEL || DEFAULT_MODEL, { messages, max_tokens, temperature });
     return Response.json({ text: r.response ?? '' });
   } catch (e) {
     return Response.json({ error: String(e) }, { status: 500 });

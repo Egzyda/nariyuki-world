@@ -21,9 +21,10 @@
     </p>
     <div class="modes">
       <div class="modes-title">住民の頭脳</div>
-      <label><input type="radio" name="mode" value="none" checked> <b>AIなし</b>（すぐ遊べる・テンプレ会話）</label>
+      <label><input type="radio" name="mode" value="none" checked> <b>AIなし</b>（すぐ遊べる・言葉の意味を読み取って返事）</label>
       <label class="webgpu"><input type="radio" name="mode" value="webllm-small"> <b>ブラウザ内AI 軽量</b>（約1GB・自由会話）</label>
       <label class="webgpu"><input type="radio" name="mode" value="webllm-std"> <b>ブラウザ内AI 標準</b>（約2GB・より賢い）</label>
+      <label class="webgpu"><input type="radio" name="mode" value="webllm-large"> <b>ブラウザ内AI 高品質</b>（約5GB・高性能GPU向け・会話が一番自然）</label>
       <label class="api" hidden><input type="radio" name="mode" value="api"> <b>クラウドAI</b>（Cloudflare Workers AI）</label>
       <div id="gpu-note" class="note"></div>
     </div>
@@ -32,7 +33,7 @@
       <div class="bar"><div id="load-bar"></div></div>
       <div id="load-text">準備中…</div>
     </div>
-    <div class="keys">移動: WASD / 矢印キー　調べる・話す: E / スペース　掲示板: B　一時停止: P</div>
+    <div class="keys">移動: WASD / 矢印キー（Shiftで走る）　話す・調べる: F　掲示板: B　一時停止: P　地図: M</div>
   </div>
 </div>
 
@@ -77,6 +78,7 @@
   <div class="chat-box">
     <div class="chat-head"><span id="chat-name"></span><span id="chat-rel"></span><button id="chat-close">✕</button></div>
     <div id="chat-log"></div>
+    <div id="chat-chips"></div>
     <div class="chat-input">
       <input id="chat-text" maxlength="80" placeholder="なんでも話しかけてみよう（嘘も交渉も自由）" autocomplete="off">
       <button id="chat-send">送る</button>
