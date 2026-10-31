@@ -1122,8 +1122,8 @@ function doSteal(a, b) {
   const success = chance(sleeping ? 0.85 : 0.55 + (a.isPlayer ? 0.1 : 0));
   let got = '';
   if (success) {
-    if (b.items.includes('meteor') && chance(0.6)) { removeItem(b, 'meteor'); a.items.push('meteor'); S.meteor.holder = a.id; S.meteor.state = 'held'; got = '光る石'; }
-    else if (b.coins >= 1) { const n = Math.min(Math.floor(b.coins), 3 + Math.floor(S.rand() * 2)); b.coins -= n; a.coins += n; got = `${n}G`; }
+    if (b.items.includes('meteor') && chance(0.6)) { removeItem(b, 'meteor'); a.items.push('meteor'); S.meteor.holder = a.id; S.meteor.state = 'held'; got = '光る石'; if (b.isPlayer) a.loot = { item: 'meteor' }; }
+    else if (b.coins >= 1) { const n = Math.min(Math.floor(b.coins), 3 + Math.floor(S.rand() * 2)); b.coins -= n; a.coins += n; got = `${n}G`; if (b.isPlayer) a.loot = { coins: n }; }
     else if (b.food > 0) { b.food--; a.food++; got = '食料'; }
   }
   S.stats.thefts++;
@@ -1770,6 +1770,19 @@ export function applyTalkResult(t, r) {
     }
   }
   if (r.note) Wolf.addNote(r.note);
+  if (r.trade) {
+    const { item, price } = r.trade;
+    if (t.items.includes(item) && p.coins >= price) {
+      p.coins -= price; t.coins += price;
+      removeItem(t, item); p.items.push(item);
+      if (item === 'meteor' && S.meteor) { S.meteor.holder = 'player'; if (S.meteor.state === 'researching') S.meteor.state = 'held'; }
+      if (t.loot?.item === item) t.loot = null;
+      memo(t, price ? `よそ者に${ITEMS[item].name}を${price}Gで売った` : `よそ者に${ITEMS[item].name}を返した`, 'info');
+      out.msgs.push(`📦 ${t.name}から${ITEMS[item].icon}${ITEMS[item].name}を${price ? price + 'Gで買った' : '返してもらった'}`);
+      log(`よそ者が${t.name}から${ITEMS[item].name}を${price ? price + 'Gで買い取った' : '取り返した'}。`);
+    }
+  }
+  if (r.returnCoins) { t.coins -= r.returnCoins; p.coins += r.returnCoins; t.loot = null; out.msgs.push(`💰 ${t.name}から${r.returnCoins}Gを返してもらった`); }
   if (r.release) { const o = byId(r.release); if (o) { releaseFromJail(o, 'petition'); out.msgs.push(`🔓 ${o.name}が釈放された`); log(`${t.name}の判断で${o.name}が牢屋から釈放された。`, 'event'); } }
   if (r.deal) { t.deal = r.deal; out.msgs.push(`🤝 取引成立：${t.name}を牢屋から出せば${r.deal.coins ? `${r.deal.coins}Gと` : ''}情報をもらえる（保釈金を払うか、逃がす）`); Wolf.addNote(`${t.name}と取引：牢屋から出せば${r.deal.coins}Gと情報`); }
   if (r.rule) {

@@ -288,6 +288,18 @@ export function togetherLine(c, dest) {
   return pick(opts);
 }
 
+// 住民が持ち物を売るときの値段（欲深さ・好感度・物の価値で決まる）
+const VALUE = { meteor: 30, elixir: 25, bomb: 20, silver: 30, weapon: 12, cursed: 2, flower: 4, sweets: 4, book: 8, sake: 5 };
+function tradeTerms(c, item) {
+  let v = VALUE[item] ?? 5;
+  if (item === 'meteor' && c.job === 'researcher') v *= 1.8;
+  if (item === 'silver' && S.wolfKnown) v *= 1.3;
+  if (item === c.likesItem) v *= 1.5;
+  const like = rel(c, 'player').like;
+  const mood = like >= 40 ? 0.8 : like <= -20 ? 1.4 : 1;
+  return { ask: Math.max(1, Math.round(v * (0.9 + c.p.greed * 0.7) * mood)), min: Math.max(1, Math.round(v * (0.55 + c.p.greed * 0.45) * mood)) };
+}
+
 export function inviteDecision(c, place, treat) {
   const r = rel(c, 'player');
   const h = hour();
@@ -325,6 +337,9 @@ function respond(c, it, raw) {
   c.pending = null;
   // 「お願いするよ」「頼んだ」なども、持ちかけ中の話への「はい」とみなす
   if (pend && it.yesish && ['unknown', 'question', 'thanks', 'reqReport'].includes(it.kind)) it = { ...it, kind: 'yes' };
+  // 値段の交渉中に「〇G払う」と言ったら、それは提示額
+  if (pend?.type === 'trade' && it.kind === 'gift' && it.coins) it = { ...it, kind: 'offer' };
+  if (pend?.type === 'trade' && it.kind === 'askItem' && it.item === pend.item && it.price != null) it = { ...it, kind: 'offer', coins: it.price };
   const sub = (v) => ({ sub: v });
 
   const doInvite = (place, treat) => {
@@ -397,6 +412,12 @@ function respond(c, it, raw) {
       break;
     case 'yes':
       if (pend?.type === 'invite') { doInvite(pend.place, true); break; }
+      if (pend?.type === 'trade') {
+        if (S.player.coins < pend.price) { res.say = Dlg.lineN(c, [`${pend.price}Gだぞ？ 金が足りないじゃないか。`, `${pend.price}Gですよ？ お金が足りないようですが。`]); c.pending = { ...pend, t: S.t }; break; }
+        res.trade = { item: pend.item, price: pend.price };
+        res.say = Dlg.lineN(c, [`毎度。ほら、${ITEMS[pend.item].name}だ。大事にしなよ。`, `ありがとうございます。どうぞ、${ITEMS[pend.item].name}です。`]);
+        break;
+      }
       if (pend?.type === 'deal') {
         res.deal = pend.deal;
         res.say = Dlg.lineN(c, ['頼んだぞ……！ 保釈金を払うか、隙を見て鍵を開けてくれ。', 'お願いします……！ 保釈金を払うか、鍵を開けてください。']);
@@ -502,6 +523,56 @@ function respond(c, it, raw) {
       if (t === c) res.say = Dlg.lineN(c, [`{I}の髪？ ${color}色だけど……なんで？`, `私の髪ですか？ ${color}色ですが……どうしてです？`]);
       else res.say = Dlg.lineN(c, [`${t.name}の髪？ たしか${color}色だよ。`, `${t.name}さんの髪は、たしか${color}色ですよ。`]);
       res.note = `${c.name}によると、${t === c ? c.name + '自身' : t.name}の髪は${color}色`;
+      break;
+    }
+    case 'askItem': case 'offer': {
+      const item = it.kind === 'offer' ? pend?.item : it.item;
+      if (!item) { res.say = Dlg.lineN(c, ['え、何の値段の話？', 'ええと、何のお値段のお話でしょう？']); break; }
+      const name = ITEMS[item].name;
+      if (!c.items.includes(item)) {
+        if (c.job === 'merchant' && ITEMS[item]?.gift) return respond(c, { ...it, kind: 'buyItem', item }, raw);
+        const holder = S.chars.find((x) => x.alive && x.items.includes(item));
+        res.say = item === 'meteor' && holder && !holder.isPlayer ? Dlg.lineN(c, [`光る石？ {I}は持ってないよ。${holder.name}が持ってるって話だけど。`, `光る石は持っていません。${holder.name}さんが持っているそうですよ。`])
+          : Dlg.lineN(c, [`${name}？ そんなもの持ってないよ。`, `${name}は持っていません。`]);
+        break;
+      }
+      // 盗んだ物を「返して」と言われたら
+      if (it.ret && c.loot?.item === item) {
+        const r0 = rel(c, 'player');
+        if (r0.fear >= 40 || c.p.honesty > 0.6) {
+          res.say = Dlg.lineN(c, ['……わかったよ、返す。悪かった。', '……お返しします。申し訳ありませんでした。']);
+          res.trade = { item, price: 0 }; res.like = 2; break;
+        }
+        res.say = Dlg.lineN(c, ['返す？ なんのことだか。……まあ、金を払うなら譲ってやってもいいがな。', '何のことでしょう。……お代をいただけるなら、お譲りしますが。']);
+      }
+      if (like <= -40) { res.say = Dlg.lineN(c, ['あんたに売る物なんかない。', 'あなたにお売りする物はありません。']); break; }
+      const { ask, min } = tradeTerms(c, item);
+      const offer = it.kind === 'offer' ? it.coins : it.price;
+      const askPrice = it.kind === 'offer' ? pend.price : ask;
+      const minPrice = it.kind === 'offer' ? pend.min : min;
+      const prefix = res.say;
+      if (offer == null) {
+        res.say = prefix + Dlg.lineN(c, [`${name}か……${askPrice}Gでどうだ？`, `${name}ですか……${askPrice}Gでいかがでしょう？`]);
+        c.pending = { type: 'trade', item, price: askPrice, min: minPrice, t: S.t };
+      } else if (offer >= minPrice) {
+        if (S.player.coins < offer) { res.say = Dlg.lineN(c, [`${offer}Gで手を打ってもいいが……金が足りないみたいだな。`, `${offer}Gでもかまいませんが……お金が足りないようですね。`]); c.pending = { type: 'trade', item, price: offer, min: minPrice, t: S.t }; break; }
+        res.trade = { item, price: offer };
+        res.say = Dlg.lineN(c, [`……${offer}Gか。いいだろう、持っていけ。`, `……${offer}Gですね。わかりました、お譲りします。`]);
+      } else if (offer < minPrice * 0.5) {
+        res.say = Dlg.lineN(c, [`${offer}G？ 話にならないね。${askPrice}Gなら考えてやる。`, `${offer}Gでは無理です。${askPrice}Gでしたら。`]);
+        c.pending = { type: 'trade', item, price: askPrice, min: minPrice, t: S.t };
+      } else {
+        const counter = Math.max(minPrice, Math.round((offer + askPrice) / 2));
+        res.say = Dlg.lineN(c, [`うーん……${counter}Gなら譲ってもいい。`, `そうですね……${counter}Gでしたらお譲りします。`]);
+        c.pending = { type: 'trade', item, price: counter, min: minPrice, t: S.t };
+      }
+      break;
+    }
+    case 'returnMoney': {
+      if (!c.loot?.coins) { res.say = Dlg.lineN(c, ['え？ 借りた覚えはないけど。', 'お金をお借りした覚えはありませんが……。']); break; }
+      const r0 = rel(c, 'player');
+      if (r0.fear >= 40 || c.p.honesty > 0.6) { res.say = Dlg.lineN(c, ['……わかったよ。ほら、返す。', '……申し訳ありません。お返しします。']); res.returnCoins = Math.min(c.loot.coins, Math.floor(c.coins)); }
+      else res.say = Dlg.lineN(c, ['何の話だ？ 証拠でもあるのか。', '何のお話でしょう？']);
       break;
     }
     case 'releaseReq': {

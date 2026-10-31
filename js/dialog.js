@@ -67,8 +67,9 @@ const YES = /^(うん|はい|いいよ|いいね|いいですね|ok|okay|オッ�
 const NO = /^(いや|いいえ|やめ|遠慮|ううん|無理|むり|結構|けっこう|だめ|ダメ|また今度|やっぱり)/;
 
 const ITEM_WORDS = {
+  silver: /(銀のナイフ|ナイフ)/, weapon: /(棍棒|こん棒|武器)/, bomb: /(爆薬|爆弾)/, cursed: /(呪いの石|黒い石)/,
   flower: /(花束|はなたば|お花|花)/, sweets: /(焼き菓子|お菓子|おかし|クッキー|菓子)/, book: /(古い本|本)/, sake: /(酒瓶|お酒|酒)/,
-  elixir: /(万能薬|薬)/, meteor: /(光る石|隕石|未知の物質)/, food: /(食べ物|たべもの|食料|パン|ご飯|ごはん|野菜|弁当)/,
+  elixir: /(万能薬|薬)/, meteor: /(光る石|光の石|ひかる石|隕石|未知の物質)/, food: /(食べ物|たべもの|食料|パン|ご飯|ごはん|野菜|弁当)/,
 };
 const GIVE = /(あげる|あげます|渡す|わたす|渡します|やるよ|やる$|どうぞ|払う|払います|プレゼント|受け取って|うけとって|お礼|差し上げ|恵んで(やる|あげる))/;
 function parseGift(t) {
@@ -112,6 +113,16 @@ export function parseIntent(text, residents, self) {
   if (/^(じゃあね|じゃあな|またね|またな|さようなら|さよなら|バイバイ|ばいばい|また今度|おやすみ|失礼します|では、?また)/.test(t)) return { ...r, kind: 'bye' };
   if (/(好きです|愛して|あいして|結婚し|けっこんし|付き合ってください|つきあってください|恋人に)/.test(t)) return { ...r, kind: 'love' };
   if (THREAT.test(t)) return { ...r, kind: 'threat' };
+  // 住民が持っている物を売り買いする（「光る石を10Gで譲って」「返して」）
+  {
+    const want = /(売って|うって|譲って|ゆずって|渡して|わたして|ちょうだい|ください|下さい|くれ|返して|かえして|欲しい|ほしい|買いたい|買わせて|買う|交換|いくら)/.test(t);
+    const item = Object.entries(ITEM_WORDS).find(([k, re]) => k !== 'food' && re.test(t))?.[0];
+    const pm = t.match(/(\d+)\s*(G|Ｇ|ゴールド|枚|円)/);
+    const price = pm ? parseInt(pm[1]) : null;
+    if (item && want) return { ...r, kind: 'askItem', item, price, ret: /(返して|かえして|返せ)/.test(t) };
+    if (/(返して|かえして|返せ)/.test(t) && /(金|かね|G|お金)/.test(t)) return { ...r, kind: 'returnMoney' };
+    if (price != null && /(どう|なら|でいい|で手を打|出す|まで|は？|で売)/.test(t) && !GIVE.test(t.replace(/払う/, ''))) return { ...r, kind: 'offer', coins: price };
+  }
   // 渡す（「2Gあげる」「花束どうぞ」「3G払うから一緒に来て」）
   const gift = parseGift(t);
   if (gift) {
