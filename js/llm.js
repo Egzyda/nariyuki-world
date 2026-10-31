@@ -41,6 +41,8 @@ export const LLM = {
   },
 
   available() { return this.mode !== 'none' && this.ready; },
+  // 日本語を自然に書き換えられるだけの大きさがあるモデルか
+  strong() { return this.available() && (this.mode === 'webllm-large' || this.mode === 'api'); },
   busy() { return this.pending > 2; },
 
   // 直列実行（エンジンは1つなので順番待ち）

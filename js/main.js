@@ -98,7 +98,8 @@ window.addEventListener('keydown', (e) => {
   if (!chatTarget && $('#picker').hidden) {
     const k = e.key.toLowerCase();
     keys.add(k);
-    if (k === 'f' || k === ' ') { e.preventDefault(); if (!e.repeat) interactKey(); }
+    if (k === 'f') { e.preventDefault(); if (!e.repeat) interactKey(); }
+    if (k === ' ') { e.preventDefault(); if (!e.repeat) setSpeed(S.paused ? 1 : 0); }
     if (k === 'escape') closeMenu();
     if (k === 'p') setSpeed(S.paused ? 1 : 0);
     if (k === 'b') switchTab('board');
@@ -399,12 +400,12 @@ function closePicker() { $('#picker').hidden = true; }
 $('#picker-close').onclick = closePicker;
 
 // ---------- サイドバー ----------
-document.querySelectorAll('#tabs button').forEach((b) => b.onclick = () => switchTab(b.dataset.tab));
+// パネルは全部表示されているので、キーで呼ばれたら枠を光らせるだけ
 function switchTab(tab) {
   currentTab = tab;
-  document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
-  document.querySelectorAll('.tab').forEach((s) => s.classList.toggle('on', s.id === 'tab-' + tab));
-  if (tab === 'board') { lastBoardSeen = S.postSeq; boardSig = ''; }
+  const el = $('#tab-' + tab)?.closest('.panel');
+  if (el) { el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 900); }
+  if (tab === 'board') { boardSig = ''; $('#post-text').focus(); }
   updateUI();
 }
 
@@ -414,6 +415,9 @@ function setSpeed(v) {
   if (v === 0) S.paused = true; else { S.paused = false; S.speed = v; }
 }
 
+$('#post-text').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#post-btn').click(); }
+});
 $('#post-btn').onclick = () => {
   const text = $('#post-text').value.trim();
   if (!text) return;
@@ -455,20 +459,19 @@ function updateUI() {
     busyEl.textContent = isJailed(p) ? '🔒 牢屋の中…（時間が早く進みます）' : A[p.activity] || '…';
   } else busyEl.hidden = true;
 
-  const newPosts = S.postSeq - lastBoardSeen;
-  $('#board-new').textContent = currentTab !== 'board' && newPosts > 0 ? `+${newPosts}` : '';
 
   const bn = $('#banner');
   if (S.banner && performance.now() < S.banner.until) {
     if (bn.hidden || bn._t !== S.banner.title) { bn.innerHTML = `<b>${esc(S.banner.title)}</b><div>${esc(S.banner.text)}</div>`; bn._t = S.banner.title; }
     bn.hidden = false;
   } else bn.hidden = true;
-  if (currentTab === 'status') renderStatus();
-  if (currentTab === 'items') renderItems();
-  if (currentTab === 'people') renderPeople();
-  if (currentTab === 'board') renderBoard();
-  if (currentTab === 'log') renderLog();
-  if (currentTab === 'notes') renderNotes();
+  renderStatus();
+  renderItems();
+  renderPeople();
+  renderBoard();
+  renderLog();
+  renderNotes();
+  updateNearCard(n);
   updateCallout();
   updateMeetingPanel();
   if (chatTarget) updateChatRel();
@@ -486,7 +489,6 @@ function renderStatus() {
       <div>腕力：<b>${(p.str + (p.items.includes('weapon') ? 8 : 0)).toFixed(1)}</b></div><div>職業：<b>${JOBS[p.job].name}</b></div>
     </div>
     ${S.wanted.has('player') ? '<div class="wanted">🚨 衛兵に手配されている！</div>' : ''}
-    <div class="box"><h4>持ち物 <small>（Iキーで詳しく）</small></h4><div class="items">${items}</div></div>
     <div class="box"><h4>町での立場：${Sim.titleFor(inf)}</h4>
       影響力 ${Math.round(inf.ratio * 100)}%（支持 ${inf.sup}人 ／ 恐怖 ${inf.fear}人 ／ 住民 ${inf.total}人）
       ${meter(inf.ratio * 100, 100, '#c8902a')}
@@ -497,11 +499,7 @@ function renderStatus() {
       事件：${S.stats.crimes}件 ／ 死者：${S.stats.deaths}人 ／ 逮捕：${S.stats.arrests}件
       ${S.meteor ? `<br>光る石：${S.meteor.state === 'ground' ? '地面に落ちている' : S.meteor.state === 'done' ? ITEMS[S.meteor.result].name + 'だった' : '誰かが持っている'}` : ''}
     </div>
-    <div class="box keys2">
-      <b>F</b>：話す・建物でできること　<b>Shift</b>：走る<br>
-      <b>I</b>：持ち物　<b>B</b>：掲示板　<b>P</b>：一時停止　<b>M</b>：地図　<b>ホイール / − =</b>：拡大縮小<br>
-      建物にはそのまま歩いて入れます。夜は🏡あなたの家（右下）か酒場で寝よう。
-    </div>`;
+    `;
   const ub = $('#tab-status [data-use]');
   if (ub) ub.onclick = () => Sim.useItem(S.player, ub.dataset.use);
 }
@@ -565,6 +563,27 @@ function renderBoard() {
       <div class="text">${esc(p.text)}</div>
       ${p.replies.map((r) => `<div class="reply"><b>${esc(r.author)}</b>：${esc(r.text)}</div>`).join('')}
     </div>`).join('');
+}
+
+// 近くの住民の情報（近づくだけで見える）
+function updateNearCard(n) {
+  const el = $('#nearcard');
+  const p = S.player;
+  const c = n?.type === 'char' ? n.target : S.chars.filter((o) => o !== p && o.alive && !isJailed(o) && distTiles(p, o) <= 3 && Sim.canSee(p, o))
+    .sort((a, b) => distTiles(p, a) - distTiles(p, b))[0];
+  if (!c || chatTarget || $('#meeting').hidden === false) { el.hidden = true; return; }
+  const r = rel(c, p);
+  const likeCol = r.like >= 0 ? '#6ac060' : '#d05050';
+  const feel = r.like >= 50 ? '大好き' : r.like >= 20 ? '好意的' : r.like > -15 ? 'ふつう' : r.like > -45 ? '警戒' : '嫌い';
+  const html = `<b>${esc(c.name)}</b> <small>${JOBS[c.job].icon}${JOBS[c.job].name}</small>
+    <div class="row"><span>好感</span>${meter(Math.abs(r.like), 100, likeCol)}<span>${Math.round(r.like)}（${feel}）</span></div>
+    <div class="row"><span>恐怖</span>${meter(r.fear, 100, '#a070d0')}<span>${Math.round(r.fear)}</span></div>
+    <div>いま：${esc(Brain.actText(c))}</div>
+    ${c.likesItem ? `<div>好物：${ITEMS[c.likesItem].icon}${ITEMS[c.likesItem].name}</div>` : ''}
+    ${c.quest ? `<div>📝 頼まれごと：${esc(c.quest.label)}を届ける</div>` : ''}
+    ${c.companion ? '<div>🤝 あなたと同行中</div>' : ''}`;
+  if (el._h !== html) { el.innerHTML = html; el._h = html; }
+  el.hidden = false;
 }
 
 function updateCallout() {
@@ -631,7 +650,11 @@ function renderNotes() {
   if ($('#tab-notes')._h !== html) { $('#tab-notes').innerHTML = html; $('#tab-notes')._h = html; }
 }
 
+let logSig = '';
 function renderLog() {
+  const sig = S.log.length + ':' + (S.log[0]?.text || '');
+  if (sig === logSig) return;
+  logSig = sig;
   $('#tab-log').innerHTML = S.log.slice(0, 120).map((l) => `<div class="logline ${l.kind}"><span class="tm">${l.day}日目 ${l.time}</span>${esc(l.text)}</div>`).join('');
 }
 

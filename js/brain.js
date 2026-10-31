@@ -27,7 +27,7 @@ const ACT_TEXT = {
   research: () => '研究をしている', forage: () => '畑で食べ物を探している', visit: () => 'ひと休みしている', sit: () => 'ひと休みしている',
 };
 
-function actText(c) {
+export function actText(c) {
   if (c.companion) return 'あんたと一緒に歩いている';
   if (c.activity && S.t < c.busyUntil && ACT_TEXT[c.activity]) return ACT_TEXT[c.activity](c);
   if (c.plan?.place && c.plan.place !== 'plaza' && c.plan.place !== 'meteor') return `${Dlg.placeName(c.plan.place)}に向かっている`;
@@ -119,7 +119,10 @@ const byName = (id) => S.chars.find((x) => x.id === id)?.name || '誰か';
 export async function talk(c, text, history) {
   const it = Dlg.parseIntent(text, residents(), c);
   const res = respond(c, it, text);
-  if (LLM.available() && res.say) {
+  // 小さいAIは日本語が崩れやすいので、内容が決まっている返事（誘い・頼みごと等）は
+  // 手書きのセリフをそのまま使い、AIには「決まった答えのない雑談」だけを任せる
+  const useAI = LLM.available() && res.say && (res.mode === 'free' || LLM.strong());
+  if (useAI) {
     const out = await llmPhrase(c, text, history, res);
     if (out) res.say = out;
   } else {
@@ -718,6 +721,9 @@ function cleanSay(text) {
   if (s.length < 2 || s.length > 110) return null;
   if (!/[ぁ-んァ-ヶ一-龠]/.test(s)) return null;
   if (/[A-Za-z]{6,}/.test(s) || BAD.test(s) || /[{}<>]/.test(s)) return null;
+  // 中国語が混ざった・崩れた文（小さいモデルにありがち）は使わない
+  if (/[这们吗呢么说话为对还进过时给让认识觉现们样么]|，|。。|！！！/.test(s)) return null;
+  if ((s.match(/[ぁ-ん]/g) || []).length < s.length * 0.15) return null;
   return s;
 }
 
@@ -879,7 +885,7 @@ export async function postAbout(c, topic, t = {}) {
   if (!c.alive) return;
   c.postsToday = (c.postsToday || 0) + 1;
   let text = null;
-  if (c.key && LLM.available() && !LLM.busy()) {
+  if (c.key && LLM.strong() && !LLM.busy()) {
     const msgs = [
       { role: 'system', content: selfDesc(c) + '\nあなたは町の掲示板に短く書き込みます。あなたの口調で、40文字以内の日本語。本文だけを出力し、かぎかっこや名前は付けない。' },
       { role: 'user', content: `きっかけ: ${TOPIC_TEXT[topic](c, t)}` },
@@ -893,7 +899,7 @@ export async function postAbout(c, topic, t = {}) {
 export async function replyTo(c, p) {
   if (!c.alive) return;
   let text = null;
-  if (c.key && LLM.available() && !LLM.busy()) {
+  if (c.key && LLM.strong() && !LLM.busy()) {
     const msgs = [
       { role: 'system', content: selfDesc(c) + '\n町の掲示板の書き込みに返信します。あなたの口調で、40文字以内の日本語。本文だけを出力する。書き込みの内容を鵜呑みにする必要はない。' },
       { role: 'user', content: `${p.author}の書き込み: 「${p.text}」` },
@@ -911,7 +917,7 @@ export async function replyTo(c, p) {
 
 // ================= 1日の方針 =================
 export async function dailyIntent(c) {
-  if (c.key && LLM.available()) {
+  if (c.key && LLM.strong()) {
     const msgs = [
       { role: 'system', content: selfDesc(c) + '\n今日一日の方針を決めます。次のJSONだけを出力:\n{"stance":"peaceful|work|scheme|aggressive","target":"気になる住民の名前 または null","thought":"今日の心の声(20文字以内)"}\npeaceful=仲良く助け合う work=真面目に働く scheme=ずる賢く立ち回る aggressive=力で押し通す' },
       { role: 'user', content: '今日はどうする？' },

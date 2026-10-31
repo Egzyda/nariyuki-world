@@ -34,7 +34,7 @@
       <div class="bar"><div id="load-bar"></div></div>
       <div id="load-text">準備中…</div>
     </div>
-    <div class="keys">移動: WASD / 矢印キー（Shiftで走る）　話す・調べる: F　掲示板: B　一時停止: P　地図: M</div>
+    <div class="keys">移動: WASD / 矢印キー（Shiftで走る）　話す・調べる: F　一時停止⇔×1: スペース　掲示板: B　地図: M</div>
   </div>
 </div>
 
@@ -47,6 +47,7 @@
     <div id="menu" hidden></div>
     <div id="busy" hidden></div>
     <div id="hint"></div>
+    <div id="nearcard" hidden></div>
     <div id="banner" hidden></div>
     <div id="callout" hidden></div>
     <div id="meeting" hidden>
@@ -56,31 +57,32 @@
     </div>
   </div>
   <aside id="side">
-    <nav id="tabs">
-      <button data-tab="status" class="on">状態</button>
-      <button data-tab="items">持ち物</button>
-      <button data-tab="people">住民</button>
-      <button data-tab="board">掲示板 <span id="board-new"></span></button>
-      <button data-tab="notes">手帳</button>
-      <button data-tab="log">記録</button>
-    </nav>
-    <section id="tab-status" class="tab on"></section>
-    <section id="tab-items" class="tab"></section>
-    <section id="tab-people" class="tab"></section>
-    <section id="tab-board" class="tab">
-      <div class="post-form">
-        <textarea id="post-text" maxlength="80" placeholder="掲示板に書き込む（住民の名前を出すと噂になる…）"></textarea>
-        <button id="post-btn">書き込む</button>
+    <div id="panels">
+      <div class="pcol">
+        <section class="panel" id="p-status"><h3>🧍 状態</h3><div id="tab-status" class="pbody"></div></section>
+        <section class="panel" id="p-items"><h3>🎒 持ち物 <small>I</small></h3><div id="tab-items" class="pbody"></div></section>
+        <section class="panel" id="p-notes"><h3>📓 手帳 <small>N</small></h3><div id="tab-notes" class="pbody"></div></section>
       </div>
-      <div id="board-list"></div>
-    </section>
-    <section id="tab-notes" class="tab"></section>
-    <section id="tab-log" class="tab"></section>
+      <div class="pcol">
+        <section class="panel" id="p-people"><h3>👥 住民 <small>クリックで詳細</small></h3><div id="tab-people" class="pbody"></div></section>
+        <section class="panel" id="p-board"><h3>📋 掲示板 <small>B</small></h3>
+          <div id="tab-board" class="pbody">
+            <div class="post-form">
+              <textarea id="post-text" maxlength="80" placeholder="掲示板に書き込む（Enterで送信／Shift+Enterで改行）"></textarea>
+              <button id="post-btn">書き込む</button>
+            </div>
+            <div id="board-list"></div>
+          </div>
+        </section>
+        <section class="panel" id="p-log"><h3>📜 記録</h3><div id="tab-log" class="pbody"></div></section>
+      </div>
+    </div>
     <div id="speed">
       <button data-speed="0">⏸</button>
       <button data-speed="1" class="on">×1</button>
       <button data-speed="2">×2</button>
       <button data-speed="4">×4</button>
+      <span class="keyhelp">移動 WASD ／ 走る Shift ／ 話す・調べる F ／ 停止⇔×1 Space ／ 地図 M ／ 拡大 ホイール</span>
     </div>
   </aside>
 </div>
