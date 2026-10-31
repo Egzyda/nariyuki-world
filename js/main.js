@@ -74,7 +74,8 @@ function loop(now) {
   if (!$('#game').hidden && S.player) {
     movePlayer(dt);
     Sim.update(dt);
-    draw(ctx, cv.width, cv.height, dt);
+    // 会話でAIの返事を待っている間は描画を止め、GPUをAIに回す
+    if (!(chatTarget && chatBusy && LLM.generating())) draw(ctx, cv.width, cv.height, dt);
     uiTimer -= dt;
     if (uiTimer <= 0) { uiTimer = 0.3; updateUI(); }
     updateToasts();

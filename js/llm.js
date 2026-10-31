@@ -33,9 +33,15 @@ export const LLM = {
     const model = MODELS[mode];
     if (!model) throw new Error('unknown mode ' + mode);
     const webllm = await import('https://esm.run/@mlc-ai/web-llm');
-    this.engine = await webllm.CreateMLCEngine(model.id, {
-      initProgressCallback: (p) => onProgress(p.progress ?? 0, p.text ?? ''),
-    });
+    const opts = { initProgressCallback: (p) => onProgress(p.progress ?? 0, p.text ?? '') };
+    try {
+      // 別スレッドで動かす（画面がカクつきにくい）
+      const worker = new Worker(new URL('./llm-worker.js', import.meta.url), { type: 'module' });
+      this.engine = await webllm.CreateWebWorkerMLCEngine(worker, model.id, opts);
+    } catch (e) {
+      console.warn('Web Worker でのAI起動に失敗。画面と同じスレッドで動かします', e);
+      this.engine = await webllm.CreateMLCEngine(model.id, opts);
+    }
     this.ready = true;
     return true;
   },
@@ -44,6 +50,9 @@ export const LLM = {
   // 日本語を自然に書き換えられるだけの大きさがあるモデルか
   strong() { return this.available() && (this.mode === 'webllm-large' || this.mode === 'api'); },
   busy() { return this.pending > 2; },
+  // 裏方の生成（掲示板・方針）は、AIが空いているときだけ
+  idle() { return this.available() && this.pending === 0; },
+  generating() { return this.pending > 0; },
 
   // 直列実行（エンジンは1つなので順番待ち）
   complete(messages, { maxTokens = 160, temperature = 0.8 } = {}) {

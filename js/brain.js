@@ -881,11 +881,20 @@ const TOPIC_TEXT = {
   death: (c, t) => `町の住民の${t.name}が亡くなった。`,
 };
 
+// 裏方のAI生成は1日に数回まで（GPUを会話のために空けておく）
+const bg = { day: 0, n: 0 };
+function bgBudget(cost = 1) {
+  if (bg.day !== day()) { bg.day = day(); bg.n = 0; }
+  if (bg.n + cost > 6) return false;
+  bg.n += cost;
+  return true;
+}
+
 export async function postAbout(c, topic, t = {}) {
   if (!c.alive) return;
   c.postsToday = (c.postsToday || 0) + 1;
   let text = null;
-  if (c.key && LLM.strong() && !LLM.busy()) {
+  if (c.key && LLM.strong() && LLM.idle() && bgBudget()) {
     const msgs = [
       { role: 'system', content: selfDesc(c) + '\nあなたは町の掲示板に短く書き込みます。あなたの口調で、40文字以内の日本語。本文だけを出力し、かぎかっこや名前は付けない。' },
       { role: 'user', content: `きっかけ: ${TOPIC_TEXT[topic](c, t)}` },
@@ -899,7 +908,7 @@ export async function postAbout(c, topic, t = {}) {
 export async function replyTo(c, p) {
   if (!c.alive) return;
   let text = null;
-  if (c.key && LLM.strong() && !LLM.busy()) {
+  if (c.key && LLM.strong() && LLM.idle() && bgBudget()) {
     const msgs = [
       { role: 'system', content: selfDesc(c) + '\n町の掲示板の書き込みに返信します。あなたの口調で、40文字以内の日本語。本文だけを出力する。書き込みの内容を鵜呑みにする必要はない。' },
       { role: 'user', content: `${p.author}の書き込み: 「${p.text}」` },
@@ -917,7 +926,7 @@ export async function replyTo(c, p) {
 
 // ================= 1日の方針 =================
 export async function dailyIntent(c) {
-  if (c.key && LLM.strong()) {
+  if (c.key && LLM.strong() && LLM.idle() && bgBudget(2)) {
     const msgs = [
       { role: 'system', content: selfDesc(c) + '\n今日一日の方針を決めます。次のJSONだけを出力:\n{"stance":"peaceful|work|scheme|aggressive","target":"気になる住民の名前 または null","thought":"今日の心の声(20文字以内)"}\npeaceful=仲良く助け合う work=真面目に働く scheme=ずる賢く立ち回る aggressive=力で押し通す' },
       { role: 'user', content: '今日はどうする？' },
