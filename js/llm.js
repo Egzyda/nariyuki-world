@@ -2,8 +2,6 @@
 // ブラウザ内LLM(WebLLM) ⇔ API(Cloudflare Workers AI) ⇔ なし(テンプレ) を差し替えられる。
 
 export const MODELS = {
-  'webllm-small': { label: 'ブラウザ内AI（軽量 1.5B / 約1GB）', id: 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC' },
-  'webllm-std':   { label: 'ブラウザ内AI（標準 3B / 約2GB）',   id: 'Qwen2.5-3B-Instruct-q4f16_1-MLC' },
   'webllm-large': { label: 'ブラウザ内AI（高品質 7B / 約5GB）', id: 'Qwen2.5-7B-Instruct-q4f16_1-MLC' },
 };
 
@@ -30,6 +28,12 @@ export const LLM = {
     this.ready = false;
     if (mode === 'none') return true;
     if (mode === 'api') { this.ready = true; return true; }
+    await this.loadBrowser(mode, onProgress);
+    this.ready = true;
+    return true;
+  },
+
+  async loadBrowser(mode, onProgress) {
     const model = MODELS[mode];
     if (!model) throw new Error('unknown mode ' + mode);
     const webllm = await import('https://esm.run/@mlc-ai/web-llm');
@@ -42,8 +46,25 @@ export const LLM = {
       console.warn('Web Worker でのAI起動に失敗。画面と同じスレッドで動かします', e);
       this.engine = await webllm.CreateMLCEngine(model.id, opts);
     }
-    this.ready = true;
-    return true;
+  },
+
+  // クラウドAIの無料枠切れ → ブラウザ内AIへ切り替え（切り替え中はAIなしで動く）
+  async switchToBrowser(onProgress = () => {}) {
+    if (this.switching || this.mode !== 'api') return;
+    this.switching = true;
+    this.mode = 'none';
+    try {
+      if (!this.hasWebGPU()) throw new Error('WebGPUなし');
+      await this.loadBrowser('webllm-large', onProgress);
+      this.mode = 'webllm-large';
+      this.ready = true;
+      this.onSwitched?.(true);
+    } catch (e) {
+      console.warn('ブラウザ内AIへの切り替えに失敗', e);
+      this.mode = 'none';
+      this.onSwitched?.(false);
+    }
+    this.switching = false;
   },
 
   available() { return this.mode !== 'none' && this.ready; },
@@ -65,7 +86,13 @@ export const LLM = {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ messages, max_tokens: maxTokens, temperature }),
           });
-          if (!res.ok) return null;
+          if (!res.ok) {
+            // 429 = 今日の無料枠を使い切った。他のエラーも3回続いたら切り替える
+            this.apiFails = (this.apiFails || 0) + 1;
+            if (res.status === 429 || this.apiFails >= 3) this.onQuota?.();
+            return null;
+          }
+          this.apiFails = 0;
           const j = await res.json();
           return j.text ?? null;
         }

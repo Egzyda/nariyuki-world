@@ -1,5 +1,6 @@
 // Cloudflare Pages Functions: /api/chat
-// Workers AI をバインド（変数名 AI）すると、タイトル画面に「クラウドAI」が選べるようになる。
+// Workers AI をバインド（変数名 AI）すると、タイトル画面の「クラウドAI」が使えるようになる。
+// 無料プランなら料金はかからず、1日の無料枠を超えるとエラーになるだけ（ゲームはブラウザ内AIに切り替える）。
 // 設定: Pages プロジェクト > 設定 > バインディング > Workers AI を追加（変数名: AI）
 // 使うモデルは環境変数 AI_MODEL で変更できる（日本語が得意なモデルほど会話が自然になる）。
 
@@ -21,6 +22,9 @@ export async function onRequestPost({ request, env }) {
     const r = await env.AI.run(env.AI_MODEL || DEFAULT_MODEL, { messages, max_tokens, temperature });
     return Response.json({ text: r.response ?? '' });
   } catch (e) {
-    return Response.json({ error: String(e) }, { status: 500 });
+    const msg = String(e);
+    // 無料枠（1日1万ニューロン）を使い切ると 4006 エラーになる。ゲーム側に 429 で知らせる
+    const quota = /4006|neuron|allocation|quota|rate limit|limit exceeded/i.test(msg);
+    return Response.json({ error: msg, quota }, { status: quota ? 429 : 500 });
   }
 }

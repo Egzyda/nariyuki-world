@@ -22,11 +22,9 @@
     </p>
     <div class="modes">
       <div class="modes-title">住民の頭脳</div>
+      <label class="api"><input type="radio" name="mode" value="api"> <b>クラウドAI</b>（おすすめ・PCに負担なし。今日の無料枠を使い切ったら自動でブラウザ内AIに切り替え）<span id="api-note" class="note"></span></label>
+      <label class="webgpu"><input type="radio" name="mode" value="webllm-large"> <b>ブラウザ内AI</b>（約5GB・高性能GPU向け）</label>
       <label><input type="radio" name="mode" value="none" checked> <b>AIなし</b>（すぐ遊べる・言葉の意味を読み取って返事）</label>
-      <label class="webgpu"><input type="radio" name="mode" value="webllm-small"> <b>ブラウザ内AI 軽量</b>（約1GB・自由会話）</label>
-      <label class="webgpu"><input type="radio" name="mode" value="webllm-std"> <b>ブラウザ内AI 標準</b>（約2GB・より賢い）</label>
-      <label class="webgpu"><input type="radio" name="mode" value="webllm-large"> <b>ブラウザ内AI 高品質</b>（約5GB・高性能GPU向け・会話が一番自然）</label>
-      <label class="api" hidden><input type="radio" name="mode" value="api"> <b>クラウドAI</b>（Cloudflare Workers AI）</label>
       <div id="gpu-note" class="note"></div>
     </div>
     <button id="start" class="big">町に入る</button>

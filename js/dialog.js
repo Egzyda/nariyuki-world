@@ -172,7 +172,7 @@ export function parseIntent(text, residents, self) {
   if (/(趣味|しゅみ|好きな|好物|こうぶつ|好きなもの)/.test(t)) return { ...r, kind: 'likes' };
   if (/(噂|うわさ|ニュース|事件|最近|さいきん|変わったこと)/.test(t)) return { ...r, kind: 'rumor' };
   if (/(この町|この街|町のこと|町について|この村|ナリユキ)/.test(t)) return { ...r, kind: 'town' };
-  if (/(天気|てんき|暑い|あつい|寒い|さむい|晴れ|雨|日照り)/.test(t)) return { ...r, kind: 'weather' };
+  if (/(天気|てんき|暑い|あつい|寒い|さむい|晴れ|雨|日照り|空が|空は|星が|星空|月が|風が|景色|夕日|夕焼け|朝日)/.test(t)) return { ...r, kind: 'weather' };
   if (/(手伝|てつだ|困って|こまって|助けよう|助けたい|力になる|何かできる|なにかできる)/.test(t)) return { ...r, kind: 'help' };
   if (NICE.test(t)) return { ...r, kind: 'compliment' };
   if (/(こんにちは|こんちは|こんばんは|おはよう|やあ|よう|どうも|ハロー|はろー|ちーっす|こんにちわ|もしもし)/.test(t)) return { ...r, kind: 'greet' };

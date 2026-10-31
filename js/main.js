@@ -28,8 +28,25 @@ const PLAYER_SPEED = 230;   // px/秒（Shiftで1.6倍）
   } else {
     $('#gpu-note').textContent = 'ブラウザ内AIは初回にモデルをダウンロードします（2回目以降はキャッシュ）。';
   }
-  if (await LLM.probeApi()) $('.api').hidden = false;
+  const api = await LLM.probeApi();
+  const apiInput = $('.api input');
+  if (api) apiInput.checked = true;
+  else {
+    $('.api').classList.add('disabled'); apiInput.disabled = true;
+    $('#api-note').textContent = '（未設定：Cloudflare Pages に Workers AI を追加すると使えます。READMEを参照）';
+    document.querySelector(LLM.hasWebGPU() ? 'input[value="webllm-large"]' : 'input[value="none"]').checked = true;
+  }
 })();
+
+// クラウドAIの無料枠が切れたら、ブラウザ内AIに切り替える
+LLM.onQuota = () => {
+  if (LLM.switching) return;
+  toast(LLM.hasWebGPU() ? '☁️ クラウドAIの今日の無料枠を使い切りました。ブラウザ内AIに切り替えます（読み込み中はAIなしで動きます）'
+    : '☁️ クラウドAIの今日の無料枠を使い切りました。このブラウザではブラウザ内AIが使えないため、AIなしで続けます');
+  LLM.switchToBrowser((p) => { aiLoad = Math.round(p * 100); });
+};
+LLM.onSwitched = (ok) => { aiLoad = null; toast(ok ? '🧠 ブラウザ内AIに切り替わりました' : 'ブラウザ内AIを読み込めませんでした。AIなしで続けます'); };
+let aiLoad = null;
 
 $('#start').onclick = async () => {
   const mode = document.querySelector('input[name=mode]:checked').value;
@@ -443,7 +460,7 @@ let boardSig = '';
 function updateUI() {
   const p = S.player;
   if (!p) return;
-  $('#hud').innerHTML = `<b>${day()}日目</b> ${timeStr()}　残り${Math.max(0, LAST_DAY - day())}日　📍${whereText()}${S.paused && !chatTarget ? '　⏸ 一時停止中' : ''}${S.droughtUntilDay >= day() ? '　☀️日照り' : ''}`;
+  $('#hud').innerHTML = `<b>${day()}日目</b> ${timeStr()}　残り${Math.max(0, LAST_DAY - day())}日　📍${whereText()}${aiLoad != null ? `　🧠AI切替中 ${aiLoad}%` : ''}${S.paused && !chatTarget ? '　⏸ 一時停止中' : ''}${S.droughtUntilDay >= day() ? '　☀️日照り' : ''}`;
 
   const n = nearestThing();
   let hint = '';
