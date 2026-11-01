@@ -983,7 +983,7 @@ function updateMeetingPanel() {
     $('#meeting-log').scrollTop = 1e9;
   }
   // 操作部分（段階が変わったときだけ作り直す。入力中の文字は消えない）
-  const cs = m.state + ':' + (m.ruleWait ? 'rule' : '');
+  const cs = m.state + ':' + (m.ruleWait ? m.ruleWait.item.type + (m.ruleWait.item.targetId || m.ruleWait.item.rule?.key || '') : '');
   if (cs === ctrlSig) return;
   ctrlSig = cs;
   const ctrl = $('#meeting-ctrl');
@@ -993,7 +993,13 @@ function updateMeetingPanel() {
     $('#meeting-say').onclick = sayIt;
     $('#meeting-text').onkeydown = (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); sayIt(); } };
   };
-  if (m.state === 'talking' && m.ruleWait) {
+  if (m.state === 'talking' && m.ruleWait?.item.type === 'trialVote') {
+    const tn = S.chars.find((c) => c.id === m.ruleWait.item.targetId)?.name || 'よそ者';
+    ctrl.innerHTML = `<div class="sub2">${esc(tn)}をどうする？（意見を言ってから投票してもいい）</div>${sayRow}
+      <div class="row votes"><button data-r="jail">牢屋に1日</button><button data-r="fine">罰金5G</button><button data-r="forgive" class="ghost">許す</button><button data-r="abstain" class="ghost">棄権</button></div>`;
+    bindSay();
+    ctrl.querySelectorAll('[data-r]').forEach((b) => b.onclick = () => Wolf.playerRuleVote(b.dataset.r));
+  } else if (m.state === 'talking' && m.ruleWait) {
     const d = Town.describe(m.ruleWait.item.rule);
     ctrl.innerHTML = `<div class="sub2">「${esc(d)}」に、あなたは？（意見を言ってから投票してもいい）</div>${sayRow}
       <div class="row votes"><button data-r="yes">賛成</button><button data-r="no">反対</button><button data-r="abstain" class="ghost">棄権</button></div>`;
@@ -1019,7 +1025,7 @@ function renderNotes() {
   const quests = residents().filter((c) => c.alive && c.quest && S.t < c.quest.until);
   const m = S.meeting;
   let html = '';
-  if (m && m.state === 'planned') html += `<div class="box"><h4>📣 予定</h4>${Math.floor((m.at % 1440) / 60)}時に広場で話し合い</div>`;
+  if (m && m.state === 'planned') html += `<div class="box"><h4>📣 予定</h4>${Math.floor((m.at % 1440) / 60)}時に広場で話し合い${(m.trials || []).length ? `（議題：${m.trials.map((tr) => esc(Wolf.trialTitle(tr))).join('、')}）` : ''}</div>`;
   if (quests.length) html += '<div class="box"><h4>📝 頼まれごと</h4>' + quests.map((c) => `${esc(c.name)}に<b>${esc(c.quest.label)}</b>を届ける（お礼${c.quest.reward}G）`).join('<br>') + '</div>';
   html += '<div class="box"><h4>📓 手帳（見聞きしたこと）</h4>' + (S.notes.length ? S.notes.map((n) => `<div class="logline"><span class="tm">${n.day}日目 ${n.time}</span>${esc(n.text)}</div>`).join('')
     : '<div class="sub3">まだ何も書いていない。住民の証言や現場の手がかりがここにたまっていく。</div>') + '</div>';

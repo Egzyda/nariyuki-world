@@ -341,6 +341,8 @@ function respond(c, it, raw) {
   if (pend && it.yesish && ['unknown', 'question', 'thanks', 'reqReport'].includes(it.kind)) it = { ...it, kind: 'yes' };
   // 値段の交渉中に「〇G払う」と言ったら、それは提示額
   if (pend?.type === 'trade' && it.kind === 'gift' && it.coins) it = { ...it, kind: 'offer' };
+  // 「話し合い？ 何について？」と聞かれたあとに、人の名前を出したら議題になる
+  if (pend?.type === 'meetingWhy' && it.target && !['gift', 'askItem', 'offer'].includes(it.kind)) it = { ...it, kind: 'meeting', trial: true };
   if (pend?.type === 'trade' && it.kind === 'askItem' && it.item === pend.item && it.price != null) it = { ...it, kind: 'offer', coins: it.price };
   const sub = (v) => ({ sub: v });
 
@@ -707,13 +709,34 @@ function respond(c, it, raw) {
       break;
     }
     case 'meeting': {
+      // 誰かの悪いことについて：自分で見ていたり、町で知られていたりすれば、好感度が低くても乗ってくれる
+      const t = it.target && it.target !== c ? it.target : null;
+      if (t && t.alive) {
+        const tn = Dlg.toneOf(c).pol ? `${t.name}さん` : t.name;
+        const saw = Wolf.crimesOf(c, t).length > 0;
+        const known = Wolf.knownCrimes(t).length > 0;
+        const close = rel(c, t).like >= 40;
+        if (Wolf.meetingActive()) {
+          res.say = Dlg.lineN(c, [`${Math.floor((S.meeting.at % 1440) / 60)}時の話し合いで、${tn}のことも話そう。`, `${Math.floor((S.meeting.at % 1440) / 60)}時の話し合いで、${tn}のことも話しましょう。`]);
+          res.trial = t.id; break;
+        }
+        if (close && !saw) { res.say = Dlg.lineN(c, [`${tn}を吊るし上げるようなことはしたくないな。`, `${tn}を皆で責めるようなことは、したくありません。`]); break; }
+        if (saw || (known && like >= -10) || like >= 20) {
+          res.say = Dlg.lineN(c, [`${saw ? '{I}も見たしね。' : ''}わかった、${tn}のことをみんなで決めよう。1時間後に広場の噴水の前に声をかけておくよ。`,
+            `${saw ? '私も見ましたし……。' : ''}わかりました。${tn}のこと、みんなで決めましょう。1時間後に広場の噴水の前に集まるよう、声をかけておきます。`]);
+          res.trial = t.id; res.like = gainLike(c, 1);
+          break;
+        }
+        res.say = Dlg.lineN(c, [`${tn}が何かしたの？ よく知らないことで集まるのはちょっとね。`, `${tn}が何か……？ よく知らないことで集まるのは、ちょっと。`]);
+        break;
+      }
       if (Wolf.meetingActive()) {
         const at = S.meeting.at;
         res.say = Dlg.lineN(c, [`もう${Math.floor((at % 1440) / 60)}時に広場で話し合うことになってるよ。`, `${Math.floor((at % 1440) / 60)}時に広場で話し合うことになっていますよ。`]);
         break;
       }
       if (S.wolfKnown || like >= 20) { res.say = Dlg.lineN(c, ['わかった、みんなに声をかけるよ。1時間後に広場の噴水の前ね。', 'わかりました。みんなに声をかけます。1時間後に広場の噴水の前で。']); res.meeting = true; }
-      else res.say = Dlg.lineN(c, ['話し合い？ 何のために？', '話し合い……ですか？ 何についてでしょう。']);
+      else { res.say = Dlg.lineN(c, ['話し合い？ 何について？ 誰かが何かしたの？', '話し合い……ですか？ 何について、誰のことでしょう。']); c.pending = { type: 'meetingWhy', t: S.t }; }
       break;
     }
     case 'whatHappened': {

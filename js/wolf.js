@@ -478,11 +478,45 @@ const RING = [[24, 16], [25, 16], [26, 16], [27, 16], [23, 17], [28, 17], [23, 1
 
 export function meetingActive() { return S.meeting && S.meeting.state !== 'done'; }
 
-export function scheduleMeeting(orgId, delayMin, reason, rule = null) {
+// ================= 処遇の話し合い（悪いことをした住民をどうするか） =================
+const CRIME_WORDS = /(盗|殴|襲|忍び込|乱暴|脅|くすね)/;
+// 「〜を働く」→「〜を働いた」のように、した事の言い方にそろえる
+const past = (s) => s.replace(/働く$/, '働いた').replace(/入る$/, '入った').replace(/殴る$/, '殴った').replace(/かかる$/, 'かかった').replace(/脅す$/, '脅した').replace(/くすねる$/, 'くすねた');
+// o が覚えている、t がした悪いこと（見た／自分がやられた）。{ text: 「ハルに盗みを働いた」, victim }
+export function crimesOf(o, t) {
+  if (!o || !t || o === t) return [];
+  const out = [];
+  for (const raw of o.memory) {
+    const m = raw.replace(/^\d+日目 /, '');
+    if (m.includes('人狼') || !CRIME_WORDS.test(m)) continue;
+    if (m.startsWith(`${t.name}が`)) out.push({ text: past(m.slice(t.name.length + 1).replace(/のを見た$/, '')), victim: false });
+    else if (m.startsWith(`${t.name}に`) && /(盗まれ|殴られ|襲われ|脅され)/.test(m)) out.push({ text: `${o.name}に${/盗/.test(m) ? '盗みを働いた' : /脅/.test(m) ? '脅しをかけた' : '乱暴した'}`, victim: true });
+  }
+  return out;
+}
+// 町のだれかが知っている、t の悪いこと
+export function knownCrimes(t) {
+  const set = new Set();
+  for (const o of residents()) if (o.alive) for (const x of crimesOf(o, t)) set.add(x.text);
+  return [...set];
+}
+const TRIAL_NAME = { jail: '牢屋に1日入れる', fine: '罰金5Gを町の金庫へ', forgive: '今回は許す' };
+export const trialTitle = (tr) => `${byId(tr.targetId)?.name || 'よそ者'}の処遇`;
+
+function addTrial(m, trial) {
+  if (!trial || m.trials.some((x) => x.targetId === trial.targetId)) return;
+  m.trials.push(trial);
+}
+
+export function scheduleMeeting(orgId, delayMin, reason, rule = null, trial = null) {
   if (meetingActive()) {
     if (rule && !S.meeting.agenda.some((a) => a.rule.key === rule.key)) {
       S.meeting.agenda.push({ rule, proposer: orgId });
       addNote(`次の話し合いの議題に「${Town.describe(rule)}」が加わった`);
+    }
+    if (trial && !S.meeting.trials.some((x) => x.targetId === trial.targetId)) {
+      addTrial(S.meeting, trial);
+      addNote(`次の話し合いの議題に「${trialTitle(trial)}」が加わった`);
     }
     return S.meeting;
   }
@@ -491,15 +525,17 @@ export function scheduleMeeting(orgId, delayMin, reason, rule = null) {
   if (tod < 8 * 60) at += 8 * 60 - tod;
   else if (tod > 20 * 60) at += 24 * 60 - tod + 8 * 60;
   const org = orgId === 'player' ? S.player : byId(orgId);
-  S.meeting = { at, org: orgId, reason, state: 'planned', present: [], queue: [], log: [], nextReal: 0, playerIn: false, votes: null, result: null, agenda: [] };
+  S.meeting = { at, org: orgId, reason, state: 'planned', present: [], queue: [], log: [], nextReal: 0, playerIn: false, votes: null, result: null, agenda: [], trials: [] };
   if (rule) S.meeting.agenda.push({ rule, proposer: orgId });
+  if (trial) addTrial(S.meeting, trial);
   // 人狼の事件のあと、村長は夜間外出禁止を議題にする
   const may = Town.mayor();
   if (reason === 'death' && may && !S.rules.curfew) S.meeting.agenda.push({ rule: { key: 'curfew', value: true }, proposer: may.id });
   else if (reason === 'death' && may && !S.rules.patrol && S.wolf.kills.length >= 2) S.meeting.agenda.push({ rule: { key: 'patrol', value: true }, proposer: may.id });
   const hh = Math.floor((at % 1440) / 60);
   const dayWord = Math.floor(at / 1440) + 1 === day() ? '今日' : '明日';
-  const why = (reason === 'death' ? '人狼のことを話し合いたい。' : reason === 'suspect' ? '人狼が誰なのか、みんなで話し合おう。' : '話し合いたいことがある。')
+  const why = (reason === 'death' ? '人狼のことを話し合いたい。' : reason === 'suspect' ? '人狼が誰なのか、みんなで話し合おう。'
+    : trial ? `${byId(trial.targetId)?.name || 'よそ者'}のしたことについて、どうするかみんなで決めたい。` : '話し合いたいことがある。')
     + (S.meeting.agenda.length ? `議題：${S.meeting.agenda.map((a) => Town.describe(a.rule)).join('、')}` : '');
   post(org.isPlayer ? 'あなた' : org.name, `【呼びかけ】${dayWord}${hh}時、広場の噴水の前に集まってほしい。${why}`, { authorId: orgId });
   log(`${dn(org)}が${dayWord}${hh}時に広場での話し合いを呼びかけた。`, 'event');
@@ -512,7 +548,9 @@ export function scheduleMeeting(orgId, delayMin, reason, rule = null) {
 function wantsToGo(c, m) {
   if (c.meetingGo != null) return c.meetingGo;
   if (c.id === m.org) return (c.meetingGo = true);
-  const base = (S.wolfKnown ? 0.55 : 0.2) + c.p.sociability * 0.35 + (c.isWolf ? 0.4 : 0) + (m.org === 'player' ? (rel(c, 'player').like / 200) : 0);
+  // 悪いことを見た人は、処遇の話し合いにかならず来る。それ以外も、事件があれば集まりやすい
+  if ((m.trials || []).some((tr) => crimesOf(c, byId(tr.targetId)).length)) return (c.meetingGo = true);
+  const base = (S.wolfKnown ? 0.55 : 0.2) + ((m.trials || []).length ? 0.3 : 0) + c.p.sociability * 0.35 + (c.isWolf ? 0.4 : 0) + (m.org === 'player' ? (rel(c, 'player').like / 200) : 0);
   return (c.meetingGo = chance(base));
 }
 
@@ -550,7 +588,7 @@ function meetingTick() {
     m.ruleWait = null;
   }
   if (m.state === 'talking' && m.playerIn && performance.now() >= m.nextReal) {
-    if (m.queue[0]?.type === 'ruleVote' && !m.queue[0].playerVote) {
+    if (['ruleVote', 'trialVote'].includes(m.queue[0]?.type) && !m.queue[0].playerVote) {
       m.ruleWait = { item: m.queue[0], deadline: performance.now() + 25000 };
       return;
     }
@@ -593,6 +631,7 @@ function buildQueue(m, present) {
   const victims = S.wolf.kills.map((k) => byId(k.id)?.name).filter(Boolean);
   m.queue.push({ type: 'open', c: opener, victims });
   for (const a of m.agenda) m.queue.push({ type: 'rule', rule: a.rule, proposer: a.proposer, c: byId(a.proposer) && list.includes(byId(a.proposer)) ? byId(a.proposer) : opener });
+  for (const tr of m.trials || []) m.queue.push({ type: 'trial', targetId: tr.targetId, proposer: tr.proposer, c: byId(tr.proposer) && list.includes(byId(tr.proposer)) ? byId(tr.proposer) : opener });
   if (!S.wolfKnown) return;
   const order = list.slice(1).sort(() => S.rand() - 0.5);
   for (const c of [opener, ...order]) m.queue.push({ type: 'say', c });
@@ -605,7 +644,9 @@ function speakNext(m) {
   if (!c || !c.alive) return '';
   let text = '';
   if (item.type === 'open') {
-    if (m.org === 'player') text = pol(c) ? 'よそ者の方の呼びかけで集まりました。何か話があるそうです。' : 'よそ者の呼びかけで集まった。話があるらしいな。';
+    if ((m.trials || []).length && !item.victims.length) text = pol(c) ? `集まってくれてありがとうございます。今日は${m.trials.map((tr) => nm(c, byId(tr.targetId) || S.player)).join('、')}のしたことについて、どうするか決めたいと思います。`
+      : `集まってくれてありがとう。今日は${m.trials.map((tr) => nm(c, byId(tr.targetId) || S.player)).join('、')}のしたことについて、どうするか決めたい。`;
+    else if (m.org === 'player') text = pol(c) ? 'よそ者の方の呼びかけで集まりました。何か話があるそうです。' : 'よそ者の呼びかけで集まった。話があるらしいな。';
     else if (item.victims.length) text = pol(c) ? `集まってくれてありがとうございます。${item.victims.join('さん、')}さんを襲った人狼が、この中にいるかもしれません。みんなの考えを聞かせてください。`
       : `集まってくれてありがとう。${item.victims.join('、')}を襲った人狼が、この中にいるかもしれない。みんなの考えを聞かせてくれ。`;
     else text = pol(c) ? '集まってくれてありがとうございます。みんなで話し合いましょう。' : 'みんな、集まってくれてありがとう。話し合おう。';
@@ -647,6 +688,70 @@ function speakNext(m) {
     text = item.proposer === 'player' ? `よそ者から「${d}」という提案があった。みんな、どう思う？`
       : pol(c) ? `ひとつ提案があります。「${d}」にしたいと思います。賛成か反対か、聞かせてください。` : `提案がある。「${d}」にしたいと思う。賛成か反対か、聞かせてくれ。`;
     m.queue.unshift({ type: 'ruleVote', rule: item.rule, proposer: item.proposer, c });
+  } else if (item.type === 'trial') {
+    const t = byId(item.targetId) || S.player;
+    const crimes = knownCrimes(t);
+    const what = crimes[0] || '悪いことをした';
+    if (crimesOf(c, t).length) (m.trialHeard ||= new Set()).add(t.id);   // 見た人が話したので、みんな本当だと思う
+    text = item.proposer === 'player' ? (pol(c) ? `よそ者の方から、${nm(c, t)}が${what}という話がありました。どうするか決めましょう。` : `よそ者から、${nm(c, t)}が${what}って話があった。どうするか決めよう。`)
+      : pol(c) ? `${nm(c, t)}が${what}ようです。どうするか、みんなで決めましょう。` : `${nm(c, t)}が${what}らしい。どうするか、みんなで決めよう。`;
+    // 見た人の証言 → 本人の言い分 → 採決
+    const next = [];
+    for (const id of m.present) {
+      const o = byId(id);
+      if (!o || o === c || o === t || !crimesOf(o, t).length) continue;
+      next.push({ type: 'trialWit', c: o, targetId: t.id });
+      if (next.length >= 3) break;
+    }
+    if (m.present.includes(t.id)) next.push({ type: 'trialDefend', c: t });
+    next.push({ type: 'trialVote', targetId: t.id, proposer: item.proposer, c });
+    m.queue.unshift(...next);
+  } else if (item.type === 'trialWit') {
+    const t = byId(item.targetId) || S.player;
+    const cr = crimesOf(c, t)[0] || { text: '', victim: false };
+    text = cr.victim ? (pol(c) ? `被害にあったのは私です。${nm(c, t)}に盗られたんです。` : `やられたのは${firstPerson(c)}だよ。${nm(c, t)}にな。`)
+      : pol(c) ? `私も見ました。${nm(c, t)}が${cr.text}ところを。` : `${firstPerson(c)}も見たよ。${nm(c, t)}が${cr.text}ところをな。`;
+    (m.trialHeard ||= new Set()).add(t.id);
+  } else if (item.type === 'trialDefend') {
+    text = pick(c.p.honesty > 0.6 ? (pol(c) ? ['……申し訳ありませんでした。もうしません。', '出来心だったんです。許してください。'] : ['……悪かったよ。もうしない。', '出来心だったんだ。許してくれ。'])
+      : (pol(c) ? ['そんなこと、していません！', '誤解です。私じゃありません。'] : ['そんなことしてない！', '言いがかりだ。証拠はあるのか？']));
+    c.trialHonest = c.p.honesty > 0.6;
+  } else if (item.type === 'trialVote') {
+    const t = byId(item.targetId) || S.player;
+    const tally = { jail: [], fine: [], forgive: [] };
+    for (const id of m.present) {
+      const o = byId(id);
+      if (!o || !o.alive) continue;
+      if (o === t) { tally.forgive.push(o.name); continue; }
+      const mine = crimesOf(o, t);
+      const saw = mine.length > 0;
+      if (mine.some((x) => x.victim)) { tally[o.p.aggression > 0.5 || o.p.honesty > 0.5 ? 'jail' : 'fine'].push(o.name); continue; }   // やられた本人
+      const heard = m.trialHeard?.has(t.id);
+      const sev = saw ? 1 : heard ? 0.7 : 0.35;
+      const like = rel(o, t.isPlayer ? 'player' : t.id).like;
+      const anger = sev * (0.45 + o.p.honesty * 0.45) + o.p.aggression * 0.2 - like / 140 - (t.trialHonest ? 0.15 : 0) + (m.trialShift || 0) * trust(o, 'player');
+      tally[anger > 0.72 ? 'jail' : anger > 0.4 ? 'fine' : 'forgive'].push(o.name);
+    }
+    const pv = item.playerVote;
+    if (m.playerIn && tally[pv]) tally[pv].push('あなた');
+    m.trialShift = 0;
+    m.log.push({ who: '', text: `牢屋：${tally.jail.join('、') || 'なし'}／罰金：${tally.fine.join('、') || 'なし'}／許す：${tally.forgive.join('、') || 'なし'}`, cls: 'vote' });
+    // 罰したい人（牢屋＋罰金）が許す人より多ければ罰する。牢屋と罰金が同数なら軽い罰金
+    const punish = tally.jail.length + tally.fine.length;
+    const best = punish > tally.forgive.length ? (tally.jail.length > tally.fine.length ? 'jail' : 'fine') : 'forgive';
+    const tn = dn(t);
+    if (best === 'jail') { Sim.jail(t, 24 * 60); S.wanted.delete(t.id); text = `${tally.jail.length}票で、${tn}を牢屋に1日入れることになった。`; }
+    else if (best === 'fine') { const n = Math.min(5, Math.floor(t.coins)); t.coins -= n; S.treasury += n; text = `${tally.fine.length}票で、${tn}は罰金${n}Gを町の金庫に払うことになった。`; }
+    else text = `${tally.forgive.length}票で、${tn}は今回は許されることになった。`;
+    for (const id of m.present) { const o = byId(id); if (o && o !== t) memo(o, `話し合いで${tn}の処遇が決まった（${TRIAL_NAME[best]}）`, 'meeting'); }
+    if (best !== 'forgive' && !t.isPlayer) addLike(t, S.player, item.proposer === 'player' ? -15 : -5);
+    if (t.isPlayer && best !== 'forgive') toast(best === 'jail' ? '話し合いの結果、あなたは牢屋に1日入れられた……' : '話し合いの結果、罰金を払わされた……');
+    m.log.push({ who: '', text, cls: 'result' });
+    log(`話し合いで${tn}の処遇が決まった：${TRIAL_NAME[best]}`, 'event');
+    post('町役場', `【話し合いの結果】${text}`, { authorId: 'town' });
+    addNote(text);
+    m.trials = m.trials.filter((x) => x.targetId !== item.targetId);
+    return text;
   } else if (item.type === 'ruleVote') {
     const yes = [], no = [];
     for (const id of m.present) {
@@ -679,6 +784,18 @@ export function playerSpeak(text) {
   if (!m || !['talking', 'voting'].includes(m.state)) return;
   m.log.push({ who: 'あなた', text, cls: 'me' });
   const t = text.replace(/\s+/g, '');
+  // 処遇の話し合いの最中：厳しくするか、許すか
+  const trialCtx = m.ruleWait?.item.type === 'trialVote' || m.queue.some((i) => i.type.startsWith('trial'));
+  if (trialCtx && !Town.parseRule(text)) {
+    const stance = /(許|かわいそう|反省|見逃|大目に|やりすぎ|軽く)/.test(t) ? -1 : /(牢屋|閉じ込め|厳しく|罰|許せない|ひどい|反省させ|償)/.test(t) ? 1 : 0;
+    if (stance) {
+      m.trialShift = (m.trialShift || 0) + stance * 0.25;
+      const r1 = m.present.map(byId).filter(Boolean).sort((a, b) => trust(b, 'player') - trust(a, 'player'))[0];
+      if (r1) addLine(m, r1, trust(r1, 'player') >= 0.7 ? (stance > 0 ? 'そうだな、甘い顔はできない。' : '……たしかに、やりすぎはよくないか。') : 'よそ者に言われてもねえ。');
+      m.nextReal = Math.min(m.nextReal, performance.now() + 900);
+      return;
+    }
+  }
   const ruleCtx = m.ruleWait || m.queue.some((i) => i.type === 'rule' || i.type === 'ruleVote');
   const named = [...residents()].some((o) => t.includes(o.name));
   if (ruleCtx && !named && !Town.parseRule(text)) {
@@ -736,14 +853,15 @@ export function playerSpeak(text) {
   void agree; void total;
 }
 
-const keepRuleItems = (q) => q.filter((i) => i.type === 'rule' || i.type === 'ruleVote');
+const keepRuleItems = (q) => q.filter((i) => i.type === 'rule' || i.type === 'ruleVote' || i.type.startsWith('trial'));
 
 // 決まりの採決でのプレイヤーの一票
 export function playerRuleVote(v) {
   const m = S.meeting;
   if (!m?.ruleWait) return;
   m.ruleWait.item.playerVote = v;
-  m.log.push({ who: 'あなた', text: v === 'yes' ? '賛成！' : v === 'no' ? '反対だ！' : '（棄権）', cls: 'me' });
+  const VTEXT = { yes: '賛成！', no: '反対だ！', jail: '牢屋に入れるべきだ。', fine: '罰金でいいと思う。', forgive: '今回は許してあげよう。' };
+  m.log.push({ who: 'あなた', text: VTEXT[v] || '（棄権）', cls: 'me' });
   m.ruleWait = null;
   m.nextReal = performance.now() + 500;
 }

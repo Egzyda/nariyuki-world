@@ -1838,6 +1838,11 @@ export function applyTalkResult(t, r) {
     Wolf.addNote(m); out.msgs.push(`📅 ${m}`);
   }
   if (r.meeting) { Wolf.scheduleMeeting('player', 60, 'player'); out.msgs.push('📣 1時間後に広場で話し合いが開かれる'); }
+  if (r.trial) {
+    // 処遇の話し合い：話した住民がみんなに声をかける（議題はあなたが出した）
+    const m = Wolf.scheduleMeeting(t.id, 60, 'trial', null, { targetId: r.trial, proposer: 'player' });
+    out.msgs.push(`📣 ${Math.floor((m.at % 1440) / 60)}時から広場で話し合い（議題：${Wolf.trialTitle({ targetId: r.trial })}）。噴水の前へ！`);
+  }
   if (r.accused) S.wolf.playerAccused.add(r.accused);
   if (r.quest) out.msgs.push(`📝 頼まれごと：${t.name}に${r.quest}を届ける（持ち物タブで確認）`);
   if (r.hire) { if (hirePlayer(t)) out.msgs.push(`${JOBS[t.job].icon} ${JOBS[t.job].name}になった！`); }

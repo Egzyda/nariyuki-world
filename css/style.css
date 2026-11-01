@@ -395,3 +395,5 @@ body.mobile #callout .k { display: inline; margin-left: 6px; color: #b06a10; fon
 body.mobile.callout-on #toasts { top: 118px; }
 body.mobile #busy { top: auto; bottom: 124px; font-size: 13px; }
 body.mobile #banner { top: 58px; }
+#meeting-ctrl .votes button[data-r="forgive"] { background: #3a6a40; }
+#meeting-ctrl .votes button[data-r="abstain"], #meeting-ctrl .votes button[data-v="abstain"] { background: #2c3824; }
