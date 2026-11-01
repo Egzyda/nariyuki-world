@@ -172,10 +172,51 @@ function hourly(h, d) {
   if (h === 6) daily(d);
 }
 
+// ---- 住民どうしの特別な関係（親友・恋人・犬猿の仲）。毎朝、気持ちの強さで結ばれたり切れたりする ----
+export const BOND_NAME = { friend: '親友', lover: '恋人', rival: '犬猿の仲' };
+export function bondOf(a, b) { return (S.bonds || {})[[a.id, b.id].sort().join(':')] || null; }
+function updateBonds() {
+  S.bonds ||= {};
+  const rs = residents().filter((c) => c.alive);
+  for (let i = 0; i < rs.length; i++) for (let j = i + 1; j < rs.length; j++) {
+    const a = rs[i], b = rs[j], k = [a.id, b.id].sort().join(':');
+    const ab = rel(a, b).like, ba = rel(b, a).like, cur = S.bonds[k];
+    let next = cur;
+    if (cur === 'rival' && (ab > -35 || ba > -35)) next = null;
+    if ((cur === 'friend' || cur === 'lover') && (ab < 35 || ba < 35)) next = null;
+    if (!next) {
+      if (ab <= -65 && ba <= -65) next = 'rival';
+      else if (ab >= 85 && ba >= 85 && a.female !== b.female && chance(0.5)) next = 'lover';
+      else if (ab >= 65 && ba >= 65) next = cur === 'lover' ? 'lover' : 'friend';
+    }
+    if (next === cur) continue;
+    if (next) S.bonds[k] = next; else delete S.bonds[k];
+    const msg = next === 'lover' ? `${a.name}と${b.name}が付き合い始めたらしい💕` : next === 'friend' ? `${a.name}と${b.name}は親友になった` : next === 'rival' ? `${a.name}と${b.name}は犬猿の仲になった⚡`
+      : cur === 'rival' ? `${a.name}と${b.name}のわだかまりが解けた` : `${a.name}と${b.name}の仲が冷えてしまった`;
+    log(msg, 'event');
+    memo(a, msg.replace(/[💕⚡]/g, ''), 'info'); memo(b, msg.replace(/[💕⚡]/g, ''), 'info');
+    (S.newsBonds ||= []).push(msg);
+  }
+}
+
+// ---- 朝の新聞：前の日の大きな出来事をまとめて知らせる ----
+function morningNews(d) {
+  const prev = d - 1;
+  const items = S.log.filter((l) => l.day === prev && ['event', 'crime', 'death'].includes(l.kind) && !/の朝刊|呼びかけた|町を仕切り|やってきた/.test(l.text)).map((l) => l.text);
+  const talks = S.log.filter((l) => l.day === prev && l.kind === 'talk').length;
+  const heads = [...new Set([...(S.newsBonds || []), ...items])].slice(0, 4);
+  S.newsBonds = [];
+  const y = S.today;
+  const body = (heads.length ? heads.map((h) => '・' + h.replace(/。$/, '')).join('\n') : '・とくに大きな出来事はなかった') +
+    `\n（事件${y.crimes}件／亡くなった人${y.deaths}人／住民どうしの会話${talks}回／食料の蓄え${Math.floor(S.foodStock)}食分${S.foodStock < 15 ? '・不足！' : ''}）`;
+  post('町役場', `【${d}日目の朝刊】${heads.length ? heads.map((h) => h.replace(/。$/, '')).join('。') + '。' : '昨日は平穏な一日でした。'}食料の蓄え${Math.floor(S.foodStock)}食分。`, { authorId: 'town' });
+  if (d > 1) S.banner = { title: `📰 ${d}日目の朝刊`, text: body, until: performance.now() + 9000 };
+}
+
 function daily(d) {
   const y = S.today;
-  post('町役場', `【${d}日目の朝刊】昨日の事件${y.crimes}件、亡くなった人${y.deaths}人。食料の蓄え${Math.floor(S.foodStock)}食分。` +
-    (S.foodStock < 15 ? '食料が不足しています！' : ''), { authorId: 'town' });
+  updateBonds();
+  morningNews(d);
   S.today = { crimes: 0, deaths: 0 };
   for (const c of S.chars) c.postsToday = 0;
   if (d >= D.EVENTS.drought.fromDay && S.droughtUntilDay < d && chance(D.EVENTS.drought.chance)) {

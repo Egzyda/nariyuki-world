@@ -60,6 +60,7 @@
     <div class="title-foot">
       <span id="ver"></span>
       <span id="update-note"></span>
+      <button id="help-title-btn">❓ 遊び方</button>
       <button id="update-btn">⟳ 最新版に更新</button>
     </div>
   </div>
@@ -75,6 +76,7 @@
     <div id="toasts"></div>
     <div id="menu" hidden></div>
     <div id="busy" hidden></div>
+    <div id="followbar" hidden></div>
     <div id="pausemark" hidden><b>⏸ 一時停止中</b><small>タップで再開</small></div>
     <div id="hint"></div>
     <div id="nearcard" hidden></div>
@@ -118,6 +120,7 @@
       <button id="map-btn" title="地図（M）"><i data-icon="map"></i></button>
       <button id="save-btn" title="セーブ"><i data-icon="save"></i></button>
       <button id="end-btn" title="ここで終わって評価を見る"><i data-icon="flag"></i></button>
+      <button id="help-btn" title="遊び方"><i data-icon="help"></i></button>
       <button id="title-btn" title="タイトルへ戻る"><i data-icon="home"></i></button>
       <span class="keyhelp">移動 WASD ／ 走る Shift ／ 話す・調べる F ／ 建物 E ／ 停止⇔×1 Space ／ 地図 M ／ 拡大 ホイール</span>
     </div>
@@ -152,6 +155,40 @@
   <div class="chat-box">
     <div class="chat-head"><span>誰を通報する？</span><button id="picker-close">✕</button></div>
     <div id="picker-list"></div>
+  </div>
+</div>
+
+<!-- 関係図 -->
+<div id="relmap" class="modal" hidden>
+  <div class="chat-box rel-box">
+    <div class="chat-head"><span>🕸 住民の関係図</span><span id="rel-sub"></span><button id="rel-close">✕</button></div>
+    <canvas id="rel-cv"></canvas>
+    <div id="rel-info" class="rel-info">名前をタップすると、その人の気持ちがわかります。<br>緑＝好き　赤＝嫌い（太いほど強い）／💛親友 💕恋人 ⚡犬猿の仲</div>
+  </div>
+</div>
+
+<!-- 遊び方 -->
+<div id="help" class="modal" hidden>
+  <div class="chat-box help-box">
+    <div class="chat-head"><span>❓ 遊び方</span><button id="help-close">✕</button></div>
+    <div class="help-body">
+      <h4>🎯 目的</h4>
+      <p>自由に暮らしながら、住民にまぎれた<b>人狼</b>を見つけて牢屋に入れよう。決まった終わりはない。🏁で好きなときに町の評価が見られる（続けることもできる）。</p>
+      <h4>🕹 操作</h4>
+      <p>スマホ：画面をなぞって移動（輪の外まで引っぱると走る）。丸ボタン＝話す、青いボタン＝建物でできること。2本指で拡大。<br>PC：WASD／矢印で移動、F＝話す・調べる、E＝建物、スペース＝一時停止。</p>
+      <h4>💬 会話</h4>
+      <p>自由に話しかけられる。誘う・頼む・渡す・売り買い・噂を吹き込む・恩を着せる・仲裁する・「〇〇で待ってて」など、意味を読み取って住民が動く。</p>
+      <h4>🐺 人狼</h4>
+      <p>夜中に誰かが襲われる。現場を調べる、住民に「昨日の夜どこにいた？」と聞く、髪の色を聞く、などで手がかりを集め、広場の話し合いで投票しよう。</p>
+      <h4>⚖️ 町のしくみ</h4>
+      <p>悪事は「どうするべき？」と相談でき、通報・処遇の話し合い（牢屋／罰金／許す）・様子見を選べる。役場の村長に頼むと町の決まり（税金・夜間外出禁止など）も変えられる。</p>
+      <h4>💼 仕事</h4>
+      <p>職場の住民に「雇ってください」。職業ごとに能力がある（衛兵は逮捕、医者は治療、料理人はまかない…）。状態タブで確認。</p>
+      <h4>🧠 住民の頭脳</h4>
+      <p>住民は毎朝AIで予定を立て、住民同士で話し、夜は日記を書く。仲が深まると親友・恋人、こじれると犬猿の仲になる。住民タブの「👁 観察する」でその人を追いかけられ、「🕸 関係図」で人間関係が見られる。記録タブで町の動きがわかる。</p>
+      <h4>📝 そのほか</h4>
+      <p>右上の「📝やること」に頼まれごと・約束・相談が出る。毎朝の📰朝刊で前の日の出来事がわかる。💾でセーブ（毎朝オートセーブもある）。</p>
+    </div>
   </div>
 </div>
 

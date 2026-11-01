@@ -91,7 +91,8 @@ export function relSummary(c) {
     .sort((a, b) => Math.abs(b.like) - Math.abs(a.like))
     .slice(0, 4);
   if (!arr.length) return '特に強い感情はない';
-  return arr.map((x) => `${x.n}を${x.like >= 30 ? '好き' : x.like <= -30 ? '嫌い' : ''}${x.fear >= 30 ? '・怖い' : ''}`).join('、');
+  const bond = (n) => { const o = S.chars.find((x) => x.name === n); const b = o && S.bonds?.[[c.id, o.id].sort().join(':')]; return b ? `（${{ friend: '親友', lover: '恋人', rival: '犬猿の仲' }[b]}）` : ''; };
+  return arr.map((x) => `${x.n}${bond(x.n)}を${x.like >= 30 ? '好き' : x.like <= -30 ? '嫌い' : ''}${x.fear >= 30 ? '・怖い' : ''}`).join('、');
 }
 
 function selfDesc(c) {

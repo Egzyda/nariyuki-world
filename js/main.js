@@ -172,6 +172,11 @@ let lastAutoDay = 0;
 $('#save-btn').onclick = () => toast(Save.save('manual') ? `💾 セーブした（${day()}日目 ${timeStr()}）` : 'セーブに失敗した……');
 $('#title-btn').onclick = backToTitle;
 $('#pausemark').onclick = () => setSpeed(1);
+// 遊び方
+const openHelp = () => { $('#help').hidden = false; };
+$('#help-btn').onclick = openHelp;
+$('#help-title-btn').onclick = openHelp;
+$('#help-close').onclick = () => { $('#help').hidden = true; };
 // 好きなときに終わって、町の評価を見る（そのまま続けることもできる）
 $('#end-btn').onclick = () => {
   if (!confirm('ここでいったん区切って、町の評価を見ますか？（あとで続けることもできます）')) return;
@@ -381,6 +386,7 @@ function movePlayer(dt) {
     len = Math.hypot(vx, vy) / (Math.max(0.35, Math.min(1, Math.hypot(vx, vy))) * 0.8);
   } else len = Math.hypot(vx, vy);
   if (!vx && !vy) return;
+  if (view.followId) stopFollow();   // 自分が動いたら観察をやめる
   const run = keys.has('shift') || touchRun ? 1.6 : 1;
   const sp = PLAYER_SPEED * run * (p.hunger < 15 ? 0.6 : 1) * dt;
   const x0 = p.x, y0 = p.y;
@@ -826,6 +832,7 @@ function updateUI() {
   } else bn.hidden = true;
   renderPStats();
   renderTodo();
+  updateFollowBar();
   renderStatus();
   renderItems();
   renderPeople();
@@ -966,6 +973,79 @@ function renderItems() {
   }
 }
 
+// ---------- 住民の関係（親友・恋人・犬猿の仲） ----------
+function bondsText(c) {
+  const list = residents().filter((o) => o !== c && Sim.bondOf(c, o)).map((o) => `${{ friend: '💛', lover: '💕', rival: '⚡' }[Sim.bondOf(c, o)]}${o.name}（${Sim.BOND_NAME[Sim.bondOf(c, o)]}）`);
+  return list.length ? `関係：${list.join('、')}<br>` : '';
+}
+
+// ---------- 観察モード：住民を追いかけて、その人の1日を見る ----------
+function startFollow(id) {
+  view.followId = id;
+  if (isMobile()) closeSheet();
+  updateUI();
+}
+function stopFollow() { view.followId = null; $('#followbar').hidden = true; }
+function updateFollowBar() {
+  const bar = $('#followbar');
+  const c = view.followId ? S.chars.find((x) => x.id === view.followId) : null;
+  if (!c) { bar.hidden = true; return; }
+  const plan = c.dayPlan?.find((x) => !x.done);
+  const html = `👁 <b>${esc(c.name)}</b>を観察中：${esc(Brain.actText(c))}（${esc(Brain.locName(c))}）${plan ? `<br><small>次の予定：${esc(Mind.planText(plan))}</small>` : ''}${c.intent?.thought ? `<br><small>心の声：「${esc(c.intent.thought)}」</small>` : ''}<button id="follow-stop">やめる</button><br><small>自分が動くと元に戻ります</small>`;
+  if (bar._h !== html) { bar.innerHTML = html; bar._h = html; $('#follow-stop').onclick = stopFollow; }
+  bar.hidden = false;
+}
+
+// ---------- 関係図 ----------
+let relSel = null;
+function openRelMap() { relSel = null; $('#relmap').hidden = false; drawRelMap(); }
+$('#rel-close').onclick = () => { $('#relmap').hidden = true; };
+function drawRelMap() {
+  const cvr = $('#rel-cv');
+  const W = cvr.clientWidth || 360, H = Math.min(W, 420);
+  cvr.width = W * 2; cvr.height = H * 2; cvr.style.height = H + 'px';
+  const g = cvr.getContext('2d'); g.scale(2, 2);
+  const people = [...residents(), S.player].filter((c) => c.alive || !c.undiscovered);
+  const R = Math.min(W, H) / 2 - 34, cx = W / 2, cy = H / 2;
+  const pos = new Map(people.map((c, i) => { const a = -Math.PI / 2 + (i / people.length) * Math.PI * 2; return [c.id, [cx + Math.cos(a) * R, cy + Math.sin(a) * R]]; }));
+  g.clearRect(0, 0, W, H);
+  // 線（2人の気持ちの平均）
+  for (let i = 0; i < people.length; i++) for (let j = i + 1; j < people.length; j++) {
+    const a = people[i], b = people[j];
+    if (!a.alive || !b.alive) continue;
+    const ab = a.isPlayer ? rel(b, a).like : rel(a, b).like, ba = b.isPlayer ? rel(a, b).like : rel(b, a).like;
+    const v = (ab + ba) / 2;
+    const sel = relSel && (a.id === relSel || b.id === relSel);
+    if (Math.abs(v) < 25 && !(sel && Math.abs(v) >= 10)) continue;
+    const [x1, y1] = pos.get(a.id), [x2, y2] = pos.get(b.id);
+    g.strokeStyle = v >= 0 ? `rgba(110,200,100,${relSel && !sel ? 0.12 : 0.85})` : `rgba(220,80,80,${relSel && !sel ? 0.12 : 0.85})`;
+    g.lineWidth = 1 + Math.abs(v) / 25;
+    g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+    const bd = !a.isPlayer && !b.isPlayer && Sim.bondOf(a, b);
+    if (bd) { g.font = '13px sans-serif'; g.textAlign = 'center'; g.fillText({ friend: '💛', lover: '💕', rival: '⚡' }[bd], (x1 + x2) / 2, (y1 + y2) / 2 + 4); }
+  }
+  // 名前
+  for (const c of people) {
+    const [x, y] = pos.get(c.id);
+    g.fillStyle = !c.alive ? '#333' : c.isPlayer ? '#d9485a' : relSel === c.id ? '#c8902a' : '#2c3824';
+    g.beginPath(); g.arc(x, y, 17, 0, 7); g.fill();
+    g.strokeStyle = '#ffe9a0'; g.lineWidth = relSel === c.id ? 2 : 0.5; g.stroke();
+    g.fillStyle = c.alive ? '#fff' : '#888'; g.font = 'bold 11px sans-serif'; g.textAlign = 'center';
+    g.fillText(c.isPlayer ? 'あなた' : c.name, x, y + 4);
+  }
+  cvr.onclick = (e) => {
+    const r = cvr.getBoundingClientRect();
+    const hit = people.find((c) => { const [x, y] = pos.get(c.id); return Math.hypot(e.clientX - r.left - x, e.clientY - r.top - y) < 20; });
+    relSel = hit && relSel !== hit.id ? hit.id : null;
+    drawRelMap();
+    const info = $('#rel-info');
+    if (!hit || !relSel) { info.innerHTML = '名前をタップすると、その人の気持ちがわかります。<br>緑＝好き　赤＝嫌い（太いほど強い）／💛親友 💕恋人 ⚡犬猿の仲'; return; }
+    if (hit.isPlayer) { info.innerHTML = '<b>みんなのあなたへの気持ち</b><br>' + residents().filter((o) => o.alive).sort((a, b) => rel(b, hit).like - rel(a, hit).like).map((o) => `${esc(o.name)} ${Math.round(rel(o, hit).like)}`).join('／'); return; }
+    const feel = (o) => { const v = Math.round(rel(hit, o).like); return `${esc(o.isPlayer ? 'あなた' : o.name)} ${v >= 0 ? '+' : ''}${v}`; };
+    info.innerHTML = `<b>${esc(hit.name)}の気持ち</b>${hit.intent?.thought ? `（心の声：「${esc(hit.intent.thought)}」）` : ''}<br>` + [...residents(), S.player].filter((o) => o !== hit && o.alive).sort((a, b) => rel(hit, b).like - rel(hit, a).like).map(feel).join('／') + (bondsText(hit) ? '<br>' + bondsText(hit) : '');
+  };
+}
+
 function renderPeople() {
   const p = S.player;
   // 並び順は変えない（亡くなった人も元の場所に、黒く残す）
@@ -982,6 +1062,8 @@ function renderPeople() {
       ${c.intent?.thought ? `今日の心の声：「${esc(c.intent.thought)}」<br>` : ''}
       ${c.dayPlan?.length ? `今日の予定：${c.dayPlan.map((x) => (x.done ? '✓' : '') + esc(Mind.planText(x))).join('／')}<br>` : ''}
       ${c.diary?.length ? `日記：${c.diary.map(esc).join(' / ')}<br>` : ''}
+      ${bondsText(c)}
+      ${c.alive ? `<button class="watch-btn" data-watch="${c.id}">👁 ${view.followId === c.id ? '観察をやめる' : '観察する'}</button>` : ''}
       体力${Math.round(c.hp)} 満腹${Math.round(c.hunger)} 所持金${Math.floor(c.coins)}G
       ${c.items.length ? '<br>持ち物：' + c.items.map((i) => ITEMS[i].name).join('、') : ''}
       <br>記憶：${c.memory.slice(-3).map(esc).join(' / ') || 'なし'}
@@ -995,8 +1077,11 @@ function renderPeople() {
   }).join('');
   // 中身が変わったときだけ書き直す（毎回書き直すとチカチカする）
   const el = $('#tab-people');
-  if (el._h === html) return;
-  el._h = html; el.innerHTML = html;
+  const full = `<button id="relmap-btn" class="relmap-btn">🕸 関係図を見る</button>` + html;
+  if (el._h === full) return;
+  el._h = full; el.innerHTML = full;
+  $('#relmap-btn').onclick = openRelMap;
+  el.querySelectorAll('[data-watch]').forEach((b) => b.onclick = (e) => { e.stopPropagation(); if (view.followId === b.dataset.watch) stopFollow(); else startFollow(b.dataset.watch); });
   $('#tab-people').querySelectorAll('.person').forEach((el) => el.onclick = () => { expanded = expanded === el.dataset.id ? null : el.dataset.id; renderPeople(); });
 }
 

@@ -4,7 +4,7 @@ import { T, tileType, furnAt, facAt, roofedFacAt, hash2, LAMPS, SPOTS } from './
 import { S, hour, isJailed, day } from './state.js';
 import { sheetFor, faceFor, dirIndex, SPR_W, SPR_H } from './sprites.js';
 
-export const view = { zoom: 1.5, camX: 0, camY: 0, w: 0, h: 0, showMinimap: true };
+export const view = { zoom: 1.5, camX: 0, camY: 0, w: 0, h: 0, showMinimap: true, followId: null };
 let mapCache = null, miniCache = null;
 const roofCache = {};
 const roofAlpha = {};
@@ -369,11 +369,15 @@ export function hiddenUnderRoof(c) {
 export function draw(ctx, w, h, dt) {
   if (!mapCache) { buildMapCache(); buildMini(); for (const f of FACILITIES) if (f.kind !== 'field') buildRoof(f); }
   const p = S.player;
+  // 観察モード：カメラと屋根は、追いかけている住民に合わせる
+  const fc = view.followId ? S.chars.find((c) => c.id === view.followId && c.alive) : null;
+  if (view.followId && !fc) view.followId = null;
+  const focus = fc || p;
   const Z = view.zoom;
   view.w = w; view.h = h;
   const vw = w / Z, vh = h / Z;
   // カメラ（なめらかに追従）
-  const tx = clampCam(p.x - vw / 2, MAP_W * TILE - vw), ty = clampCam(p.y - vh / 2, MAP_H * TILE - vh);
+  const tx = clampCam(focus.x - vw / 2, MAP_W * TILE - vw), ty = clampCam(focus.y - vh / 2, MAP_H * TILE - vh);
   const k = Math.min(1, dt * 8);
   view.camX += (tx - view.camX) * k; view.camY += (ty - view.camY) * k;
   if (Math.abs(tx - view.camX) > 400 || Math.abs(ty - view.camY) > 400) { view.camX = tx; view.camY = ty; }
@@ -394,12 +398,12 @@ export function draw(ctx, w, h, dt) {
   drawFountainWater(ctx, now);
 
   // 屋根の透明度（プレイヤーがいる建物は屋根を外す）
-  const [ptx, pty] = charTile(p);
+  const [ptx, pty] = charTile(focus);
   const pf = facAt(ptx, pty);
   for (const f of FACILITIES) {
     if (f.kind === 'field') continue;
     let target = 1;
-    if (pf === f && p.alive) target = (ptx === f.door[0] && pty === f.door[1]) ? 0.35 : 0;
+    if (pf === f && focus.alive) target = (ptx === f.door[0] && pty === f.door[1]) ? 0.35 : 0;
     const a = roofAlpha[f.id] ?? 1;
     roofAlpha[f.id] = a + (target - a) * Math.min(1, dt * 10);
   }
