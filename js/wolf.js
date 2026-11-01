@@ -478,6 +478,9 @@ const RING = [[24, 16], [25, 16], [26, 16], [27, 16], [23, 17], [28, 17], [23, 1
 
 export function meetingActive() { return S.meeting && S.meeting.state !== 'done'; }
 
+// よそ者の側につくと約束した住民（投票をよそ者に合わせる）
+const isAlly = (o) => o.ally && S.t < o.ally.until;
+
 // ================= 処遇の話し合い（悪いことをした住民をどうするか） =================
 const CRIME_WORDS = /(盗|殴|襲|忍び込|乱暴|脅|くすね|無実の)/;
 // 「〜を働く」→「〜を働いた」のように、した事の言い方にそろえる
@@ -724,6 +727,7 @@ function speakNext(m) {
       const o = byId(id);
       if (!o || !o.alive) continue;
       if (o === t) { tally.forgive.push(o.name); continue; }
+      if (isAlly(o) && m.playerIn && tally[item.playerVote]) { tally[item.playerVote].push(o.name); continue; }
       const mine = crimesOf(o, t);
       const saw = mine.length > 0;
       if (mine.some((x) => x.victim)) { tally[o.p.aggression > 0.5 || o.p.honesty > 0.5 ? 'jail' : 'fine'].push(o.name); continue; }   // やられた本人
@@ -759,6 +763,8 @@ function speakNext(m) {
       const o = byId(id);
       if (!o || !o.alive) continue;
       const sup = Town.support(o, item.rule, item.proposer) + (m.ruleShift || 0) * trust(o, 'player');
+      const pv0 = item.playerVote || (item.proposer === 'player' ? 'yes' : null);
+      if (isAlly(o) && m.playerIn && (pv0 === 'yes' || pv0 === 'no')) { (pv0 === 'yes' ? yes : no).push(o.name); continue; }
       (o.id === item.proposer || sup >= 0.5 ? yes : no).push(o.name);
     }
     const pv = item.playerVote || (item.proposer === 'player' ? 'yes' : null);
@@ -900,6 +906,7 @@ export function vote(playerChoice) {
     } else {
       const top = topSuspect(c);
       if (top && top.v >= 40) choice = top.t.id;
+      if (isAlly(c) && playerChoice && playerChoice !== 'abstain') choice = playerChoice;   // あなたの側につくと約束した人
     }
     if (choice && (choice === 'player' || candidate(byId(choice)))) { tally[choice] = (tally[choice] || 0) + 1; lines.push([c, choice]); }
     else lines.push([c, null]);

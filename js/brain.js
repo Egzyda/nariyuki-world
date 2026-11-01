@@ -296,6 +296,13 @@ export function takeTaskReport(c) {
   return d.text;
 }
 
+// よそ者に受けた恩（牢屋から出してもらった・助けてもらった・仲直りさせてもらった など）。なければ ''
+function favorOwed(c) {
+  const m = c.memory.slice().reverse().find((x) => /よそ者(が|に|のおかげ).*(牢屋から出|出してくれ|逃がしてくれ|助けてもら|助けてくれ|手当てして|仲直り|施し)/.test(x));
+  if (!m) return (c.favor || 0) >= 2 ? '前に世話になったこと' : '';
+  return /牢屋|出して|逃がして/.test(m) ? '牢屋から出してもらったこと' : /手当て/.test(m) ? '手当てしてもらったこと' : /仲直り/.test(m) ? '仲直りさせてもらったこと' : '助けてもらったこと';
+}
+
 // 食堂でのひとこと（料理人本人や、あなたが料理人のときは言い方を変える）
 function dinerLines(c) {
   if (c.job === 'cook') return ['今日のは自信作なんだ。', '味はどう？ 感想を聞かせて。', '作る側だと、食べる時間が一番ほっとするよ。'];
@@ -379,6 +386,8 @@ function respond(c, it, raw) {
   if (pend?.type === 'helpNeed' && pend.need === 'feud' && ['yes', 'help'].includes(it.kind)) it = { ...it, kind: 'mediate', target: byIdC(pend.enemyId) };
   if (pend?.type === 'helpNeed' && pend.need === 'food' && ['yes', 'help'].includes(it.kind)) it = { ...it, kind: 'helpAccept' };
   if (pend?.type === 'helpNeed' && ['money', 'hurt'].includes(pend.need) && ['yes', 'help'].includes(it.kind)) it = { ...it, kind: 'helpAccept' };
+  // 「何をすればいい？」と聞かれたあとに「投票で俺に合わせろ」など
+  if (pend?.type === 'owe' && ['meeting', 'yes'].includes(it.kind) && /(投票|票|会議|話し合|合わせ|従|味方)/.test(raw)) it = { ...it, kind: 'demand' };
   if (pend?.type === 'meetingConfirm' && it.kind === 'yes') it = { ...it, kind: 'meeting', target: byIdC(pend.targetId), trial: !!pend.targetId, firm: true };
   if (pend?.type === 'meetingConfirm' && /(様子|放って|そっと|やっぱり|いいや|やめ)/.test(raw)) it = { ...it, kind: 'letGo' };
   if (pend?.type === 'trade' && it.kind === 'askItem' && it.item === pend.item && it.price != null) it = { ...it, kind: 'offer', coins: it.price };
@@ -771,6 +780,32 @@ function respond(c, it, raw) {
         : Dlg.lineN(c, ['ありがとう。診療所で診てもらうお金があればなあ……。', 'ありがとうございます。診療所にかかるお金があれば……。']);
       if (need === 'food') c.pending = { type: 'wantFood', t: S.t };
       res.like = gainLike(c, 2);
+      break;
+    }
+    case 'remindFavor': {
+      // 恩を着せられたとき：本当に世話になっていれば認めて、借りを返すと言う
+      const owed = favorOwed(c);
+      if (!owed) { res.say = Dlg.lineN(c, ['……何の話だ？ あんたに借りなんてないよ。', '……何のお話でしょう？ お世話になった覚えはありませんが。']); res.like = -2; break; }
+      if (like < -30) { res.say = Dlg.lineN(c, ['……恩着せがましいやつだな。', '……そうやって恩を着せるんですね。']); res.like = -3; break; }
+      res.say = Dlg.lineN(c, [`……わかってるよ。${owed}は忘れてない。借りは返すつもりだ。何をすればいい？`, `……ええ、${owed}には感謝しています。ご恩はお返しします。何をすればいいですか？`]);
+      c.pending = { type: 'owe', t: S.t };
+      break;
+    }
+    case 'demand': {
+      // 「投票は俺に合わせろ」：好感度・恐怖・恩で決まる。のめば、しばらく話し合いの投票をあなたに合わせる
+      const owed = favorOwed(c);
+      const fear = rel(c, 'player').fear;
+      const score = like / 100 + fear / 80 + (owed ? 0.45 : 0) + (pend?.type === 'owe' ? 0.2 : 0) - c.p.aggression * 0.25 + (1 - c.p.honesty) * 0.1;
+      if (score >= 0.45 || fear >= 55) {
+        res.say = fear >= 55 && like < 20
+          ? Dlg.lineN(c, ['……わ、わかったよ。話し合いではあんたに合わせる。', '……わ、わかりました。話し合いでは、あなたに従います。'])
+          : Dlg.lineN(c, [`${owed ? '借りがあるしな。' : ''}いいよ、次の話し合いではあんたに合わせる。`, `${owed ? 'ご恩もありますし……' : ''}わかりました。次の話し合いでは、あなたと同じように投票します。`]);
+        res.ally = true; res.like = owed ? 0 : -2;
+      } else if (like < 0) {
+        res.say = Dlg.lineN(c, ['なんで{I}があんたの言いなりにならなきゃいけないんだ。', 'どうして私があなたの言いなりにならなければいけないんですか。']); res.like = -5;
+      } else {
+        res.say = Dlg.lineN(c, ['……内容によるな。{I}は{I}で考えて決めるよ。', '……内容によります。自分で考えて決めますね。']);
+      }
       break;
     }
     case 'letGo': {
@@ -1212,22 +1247,43 @@ export async function postAbout(c, topic, t = {}) {
   post(c.name, text, { authorId: c.id });
 }
 
+// 掲示板の返信（AIなしのとき）：書かれた本人・見た人・やられた人・仲のいい人で言い方を変える
+function replyTemplate(c, p, alt = false) {
+  const L = (a, b) => Dlg.lineN(c, [a, b]);
+  const named = residents().find((o) => o !== c && o.alive && p.text.includes(o.name));
+  if (p.text.includes(c.name)) {
+    const guilty = Wolf.knownCrimes(c).length > 0;
+    return guilty && c.p.honesty > 0.6 ? L('……悪かったよ。反省してる。', '……申し訳ありません。反省しています。')
+      : pick(alt ? [L('{I}のことか？ 言いがかりはやめてくれ。', '私のことですか？ 言いがかりはやめてください。')] : [L('勝手なこと書くなよ。', '勝手なことを書かないでください。'), L('{I}のことか？ 証拠はあるのか。', '私のことですか？ 証拠はあるんですか。')]);
+  }
+  if (named) {
+    const mine = Wolf.crimesOf(c, named);
+    if (mine.some((x) => x.victim)) return L(`被害にあったのは{I}だ。${named.name}には困ってる。`, `被害にあったのは私です。${named.name}さんには困っています。`);
+    if (mine.length) return L(`{I}も見たよ。本当のことだ。`, `私も見ました。本当です。`);
+    if (rel(c, named).like >= 40) return L(`${named.name}がそんなことするかな……。`, `${named.name}さんがそんなことをするとは……。`);
+  }
+  const r = rel(c, 'player');
+  if (p.authorId === 'player' && r.like < -20) return pick(['よそ者の言うことなんて信じられるか。', '黙ってろ。']);
+  const used = new Set(p.replies.map((x) => x.text));
+  const opts = ['本当か？', 'それは聞き捨てならないな。', 'へえ、そうなんだ。', '証拠はあるのか？', '同感だ。', 'みんなも気をつけて。', '詳しく聞かせてくれ。'].filter((x) => !used.has(x));
+  return pick(opts.length ? opts : ['なるほど。']);
+}
+
 export async function replyTo(c, p) {
   if (!c.alive) return;
   let text = null;
   if (c.key && LLM.strong() && LLM.idle() && bgBudget()) {
     const msgs = [
       { role: 'system', content: selfDesc(c) + '\n町の掲示板の書き込みに返信します。あなたの口調で、40文字以内の日本語。本文だけを出力する。書き込みの内容を鵜呑みにする必要はない。' },
-      { role: 'user', content: `${p.author}の書き込み: 「${p.text}」` },
+      { role: 'user', content: `${p.author}の書き込み: 「${p.text}」` + (p.text.includes(c.name) ? '\n（この書き込みは、あなた自身のことを書いている）' : '') +
+        (p.replies.length ? `\nほかの人の返信: ${p.replies.map((r) => `${r.author}「${r.text}」`).join(' ')}（同じことは書かない）` : '') },
     ];
     text = cleanSay(await LLM.complete(msgs, { maxTokens: 80, temperature: 0.85, tier: 'light' }));
   }
-  if (!text) {
-    const r = rel(c, 'player');
-    text = p.authorId === 'player'
-      ? (r.like < -20 ? pick(['よそ者の言うことなんて信じられるか。', '黙ってろ。']) : POST_TEMPLATES.reply())
-      : POST_TEMPLATES.reply();
-  }
+  if (!text) text = replyTemplate(c, p);
+  // 同じ返信が並ばないように
+  if (p.replies.some((r) => r.text === text)) text = replyTemplate(c, p, true);
+  if (p.replies.some((r) => r.text === text)) return;
   p.replies.push({ author: c.name, text, time: timeStr() });
 }
 

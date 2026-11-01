@@ -116,7 +116,8 @@ export function update(dtReal) {
   // 働く・鍛えるなどの間は時間を早送り（待たされる感じを減らす）
   // 働く・食べる・治療など、ゲージが出る行動のあいだは全部早送り
   const doing = p.alive && !fast && p.busyUntil > S.t && !!p.activity && !['sleep', 'jail', 'wait'].includes(p.activity);
-  const gdt = Math.min(dtReal, 0.1) * D.GAME_MIN_PER_SEC * S.speed * (fast ? 25 : doing ? 2.5 : 1);
+  // 1時間の仕事・筋トレが、実時間でおよそ3秒
+  const gdt = Math.min(dtReal, 0.1) * D.GAME_MIN_PER_SEC * S.speed * (fast ? 25 : doing ? 5 : 1);
   const before = S.t;
   S.t += gdt;
   const h0 = Math.floor(before / 60), h1 = Math.floor(S.t / 60);
@@ -1967,6 +1968,12 @@ export function applyTalkResult(t, r) {
         out.msgs.push(`🤝 ${o.name}と${t.name}が仲直りした！`);
       } else out.msgs.push(`（${t.name}の${o.name}への気持ちが、少しだけやわらいだ）`);
     }
+  }
+  if (r.ally) {
+    t.ally = { until: S.t + 2 * 1440 };
+    const m = `${t.name}は、話し合いの投票をあなたに合わせると約束した（2日間）`;
+    Wolf.addNote(m); out.msgs.push(`🤝 ${m}`);
+    log(`${t.name}がよそ者の側につくと約束した。`, 'event');
   }
   if (r.warrant) {
     const w = byId(r.warrant);

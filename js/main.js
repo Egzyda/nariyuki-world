@@ -850,6 +850,7 @@ function todoItems() {
     if (!c.alive) continue;
     if (c.quest && S.t < c.quest.until) out.push({ k: `q:${c.id}:${c.quest.label}`, t: `📝 ${c.name}に${c.quest.label}を届ける（お礼${c.quest.reward}G）` });
     if (c.appointment) out.push({ k: `a:${c.id}:${c.appointment.at}`, t: `⏳ ${c.appointment.loose ? '' : hm(c.appointment.at) + 'に'}${Dlg.placeName(c.appointment.place)}で${c.name}が待つ` });
+    if (c.ally && S.t < c.ally.until) out.push({ k: `al:${c.id}:${c.ally.until}`, t: `🤝 ${c.name}は投票をあなたに合わせる（${Math.floor(c.ally.until / 1440) + 1}日目まで）` });
     if (c.mediation) out.push({ k: `m:${c.id}:${c.mediation.with}`, t: `🤝 ${nm(c.mediation.with)}に話して、${c.name}と仲直りさせる` });
     const pd = c.pending && S.t - c.pending.t < 180 ? c.pending : null;
     if (pd?.type === 'crimeWhat') out.push({ k: `p:${c.id}:${pd.t}`, t: `💬 ${c.name}の相談：${nm(pd.targetId)}のことをどうする？（通報・話し合い・様子見）` });
