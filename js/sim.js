@@ -147,6 +147,7 @@ function hourly(h, d) {
     const pay = JOBS[c.job].wage * bonus * (c.isPlayer ? 1 : D.NPC_WAGE_RATE);
     c.coins += pay;
     if (c.isPlayer) floatText(c, `+${pay.toFixed(1)}G`);
+    if (c.isPlayer && c.job === 'farmer' && chance(0.5)) { c.food++; toast('🌾 畑の作物を少し分けてもらった（食料+1）'); }
     if (c.job === 'farmer') S.foodStock += 1.0 * bonus * (S.droughtUntilDay >= d ? 0.35 : 1);
   }
   const m = S.meteor;
@@ -1223,7 +1224,7 @@ function doArrest(g, t) {
     log('どこかで袖の下が渡されたらしい……', 'crime');
     return;
   }
-  const ok = power(g) + S.rand() * 12 > power(t) * 0.8 + S.rand() * 12;
+  const ok = power(g) + (g.isPlayer && g.job === 'guard' ? 5 : 0) + S.rand() * 12 > power(t) * 0.8 + S.rand() * 12;
   if (ok) {
     S.wanted.delete(t.id); S.stats.arrests++;
     if (S.taxDebt?.[t.id]) S.taxDebt[t.id] = 0;
@@ -1233,9 +1234,15 @@ function doArrest(g, t) {
     memo(t, `${g.name}に捕まった`, 'crime');
     log(`衛兵の${g.name}が${dispName(t)}を捕まえた。`, 'event');
     if (t.isPlayer) toast('捕まった！ 8時間、牢屋に入れられる…');
+    if (g.isPlayer) {
+      toast(`🛡️ ${t.name}を逮捕した！ 8時間、牢屋に入る。`);
+      // 被害を受けた人・見ていた人は感謝する
+      for (const o of residents()) if (o.alive && o !== t && Wolf.crimesOf(o, t).length) { addLike(o, g, 8); memo(o, `よそ者が${t.name}を捕まえてくれた`, 'gift'); }
+    }
   } else {
     say(g, 'くそ、逃げられた！'); say(t, 'へへっ');
     if (t.isPlayer) toast(`${g.name}の手を振りほどいた！`);
+    if (g.isPlayer) toast(`${t.name}に振りほどかれた！ まだ手配中だ。`);
   }
 }
 
@@ -1365,6 +1372,16 @@ export function titleFor(inf) {
 // ================= プレイヤーの行動 =================
 export function playerBusy() { const p = S.player; return !p.alive || isJailed(p) || S.t < p.busyUntil; }
 
+const weaponCost = () => (S.player.job === 'smith' ? Math.ceil(D.WEAPON_COST / 2) : D.WEAPON_COST);
+const foodPrice = () => (S.player.job === 'merchant' ? Math.max(1, D.FOOD_PRICE - 1) : D.FOOD_PRICE);
+
+// 衛兵のよそ者が t を逮捕できる理由（手配中・町で知られている悪事）。なければ null
+export function arrestGround(t) {
+  if (S.wanted.has(t.id)) return '手配中';
+  const k = Wolf.knownCrimes(t);
+  return k.length ? k[0] : null;
+}
+
 function playerSpend(n) {
   if (S.player.coins < n) { toast(`お金が足りない（${n}G必要）`); return false; }
   S.player.coins -= n; return true;
@@ -1398,6 +1415,8 @@ export function hirePlayer(boss) {
   p.job = boss.job;
   say(boss, `よし、今日から${j.name}の仲間だ！`);
   toast(`${j.icon} ${j.name}になった！ ${placeName(j.place)}で「働く」ができる（${j.from}〜${j.to}時）。`);
+  if (D.JOB_PERKS[p.job]?.length) toast(`できること：${D.JOB_PERKS[p.job].join('／')}`);
+  if (p.job === 'smith') p.str += 1;
   log(`よそ者が${boss.name}のもとで${j.name}として働き始めた。`);
   for (const o of residents()) if (o.job === boss.job) addLike(o, p, 5);
   return true;
@@ -1418,10 +1437,10 @@ export function facilityActions(fid) {
   const open = facOpen(fid);
   if (!open) { acts.push({ id: 'closed', label: `${f.name}は爆破されて使えない…`, disabled: true }); return acts; }
   const jobHere = Object.entries(JOBS).find(([jid, j]) => j.place === fid && jid !== 'mayor');
-  if (fid === 'diner') { acts.push({ id: 'eat', label: `食べる（${D.MEAL_COST}G）蓄え${Math.floor(S.foodStock)}` }); acts.push({ id: 'sneak', label: 'つまみ食いする（盗み）' }); }
+  if (fid === 'diner') { acts.push({ id: 'eat', label: `食べる（${p.job === 'cook' ? 'まかないでタダ' : D.MEAL_COST + 'G'}）蓄え${Math.floor(S.foodStock)}` }); acts.push({ id: 'sneak', label: 'つまみ食いする（盗み）' }); }
   if (fid === 'market') {
-    acts.push({ id: 'buyfood', label: `食料を買う（${D.FOOD_PRICE}G）` });
-    if (p.food > 0) acts.push({ id: 'sellfood', label: '食料を売る（+2G）' });
+    acts.push({ id: 'buyfood', label: `食料を買う（${foodPrice()}G）` });
+    if (p.food > 0) acts.push({ id: 'sellfood', label: `食料を売る（+${p.job === 'merchant' ? 3 : 2}G）` });
     acts.push({ id: 'steal:goods', label: '商品をこっそりくすねる（盗み）' });
   }
   if (fid === 'diner') acts.push({ id: 'steal:till', label: '売上金をこっそり抜く（盗み）' });
@@ -1441,14 +1460,14 @@ export function facilityActions(fid) {
   }
   if (fid === 'farm') acts.push({ id: 'stealcrop', label: '作物をこっそり持ち帰る（盗み）' });
   if (fid === 'tavern') { acts.push({ id: 'drink', label: `一杯やって噂を聞く（${D.DRINK_COST}G）` }); acts.push({ id: 'sleep', label: `泊まる・朝まで寝る（${D.INN_COST}G）` }); }
-  if (fid === 'workshop') acts.push({ id: 'weapon', label: `武器を買う（${D.WEAPON_COST}G）腕力+8`, disabled: p.items.includes('weapon') });
-  if (fid === 'clinic') acts.push({ id: 'heal', label: `治療を受ける（${D.HEAL_COST}G）`, disabled: !doctorAvailable() });
+  if (fid === 'workshop') acts.push({ id: 'weapon', label: `武器を${p.job === 'smith' ? '自分で作る' : '買う'}（${weaponCost()}G）腕力+8`, disabled: p.items.includes('weapon') });
+  if (fid === 'clinic') acts.push(p.job === 'doctor' ? { id: 'heal', label: '自分で手当てする（タダ）' } : { id: 'heal', label: `治療を受ける（${D.HEAL_COST}G）`, disabled: !doctorAvailable() });
   if (fid === 'training') acts.push({ id: 'train', label: '体を鍛える（1時間）' });
   if (fid === 'guard') {
     acts.push({ id: 'report', label: '誰かを通報する' });
     if (S.wanted.has('player')) acts.push({ id: 'surrender', label: '自首する（4時間の牢屋）' });
   }
-  if (fid === 'lab' && p.items.includes('meteor')) acts.push({ id: 'research', label: '光る石を研究する（2時間）' });
+  if (fid === 'lab' && p.items.includes('meteor')) acts.push({ id: 'research', label: `光る石を研究する（${p.job === 'researcher' ? '1' : '2'}時間）` });
   if (S.clues?.[fid]) acts.unshift({ id: 'investigate', label: '🔍 事件の現場を調べる' });
   if (f.mine) acts.push({ id: 'sleep', label: '自分のベッドで朝まで寝る' });
   if (p.food > 0) acts.push({ id: 'eatown', label: `持っている食料を食べる（残り${p.food}）` });
@@ -1493,7 +1512,7 @@ export function doFacility(fid, act) {
   switch (act) {
     case 'eat':
       if (S.foodStock < 1) return toast('食堂の食料が尽きている！');
-      if (!playerSpend(D.MEAL_COST)) return;
+      if (p.job !== 'cook' && !playerSpend(D.MEAL_COST)) return;
       S.foodStock -= 1; payCooks(1); seatPlayer(sp.seat);
       toast('ご飯を注文した……');
       busy(30, 'eat', () => {
@@ -1540,8 +1559,8 @@ export function doFacility(fid, act) {
       busy(15);
       break;
     }
-    case 'buyfood': if (!playerSpend(D.FOOD_PRICE)) return; p.food++; payJob('merchant', 1); toast('食料を1つ買った。'); break;
-    case 'sellfood': p.food--; p.coins += 2; S.foodStock += 1; toast('食料を売った。+2G'); break;
+    case 'buyfood': if (!playerSpend(foodPrice())) return; p.food++; payJob('merchant', 1); toast('食料を1つ買った。'); break;
+    case 'sellfood': { const n = p.job === 'merchant' ? 3 : 2; p.food--; p.coins += n; S.foodStock += 1; toast(`食料を売った。+${n}G`); break; }
     case 'paydebt': Town.payDebt(); break;
     case 'treasury': S.banner = { title: `🏛️ 町の金庫：${Math.floor(S.treasury)}G`, text: `いまの決まり：${Town.rulesText().join('／')}。決まりを変えたいときは、村長に頼むか話し合いで提案しよう（例：「夜間外出禁止にしよう」「税金を下げよう」）。`, until: performance.now() + 9000 }; break;
     case 'stealcrop': {
@@ -1573,8 +1592,8 @@ export function doFacility(fid, act) {
       for (const o of S.chars) if (o.companion) endCompanion(o, true);
       seatPlayer(sp.bed, true);
       p.activity = 'sleep'; p.busyStart = S.t; p.busyUntil = nextMorning(); toast('おやすみ…（時間が早く進みます）'); break;
-    case 'weapon': if (!playerSpend(D.WEAPON_COST)) return; p.items.push('weapon'); toast('鉄の棍棒を手に入れた！ 腕力+8'); for (const o of nearby(p, 6)) addFear(o, p, 5); break;
-    case 'heal': if (!playerSpend(D.HEAL_COST)) return; payDoctor(3); seatPlayer(sp.bed, true);
+    case 'weapon': if (!playerSpend(weaponCost())) return; p.items.push('weapon'); toast('鉄の棍棒を手に入れた！ 腕力+8'); for (const o of nearby(p, 6)) addFear(o, p, 5); break;
+    case 'heal': if (p.job !== 'doctor') { if (!playerSpend(D.HEAL_COST)) return; payDoctor(3); } seatPlayer(sp.bed, true);
       busy(40, 'heal', () => { p.hp = clamp(p.hp + 45, 0, 100); toast('治療が終わった。体力+45'); floatText(p, '体力+45', '#7ae07a'); }); break;
     case 'train': seatPlayer(sp.train);
       busy(60, 'train', () => { p.str += 0.9 * (1 - p.str / 45); p.hunger = clamp(p.hunger - 3, 0, 100); toast(`鍛え終えた！ 腕力 ${p.str.toFixed(1)}`); floatText(p, '腕力UP', '#ffb070'); }); break;
@@ -1582,8 +1601,8 @@ export function doFacility(fid, act) {
     case 'research':
       if (!facOpen('lab')) return;
       S.meteor.state = 'researching'; S.meteor.holder = 'player';
-      busy(120, 'research', () => { if (S.meteor?.state === 'researching' && S.meteor.holder === 'player') finishResearch(p); });
-      toast('光る石を調べ始めた…（2時間）'); break;
+      busy(p.job === 'researcher' ? 60 : 120, 'research', () => { if (S.meteor?.state === 'researching' && S.meteor.holder === 'player') finishResearch(p); });
+      toast(`光る石を調べ始めた…（${p.job === 'researcher' ? '研究者なので1時間' : '2時間'}）`); break;
     case 'work': { seatPlayer(sp.work); const c0 = p.coins; busy(60, 'work', () => toast(`ひと仕事終えた。稼ぎ +${(p.coins - c0).toFixed(1)}G`)); toast(`${JOBS[p.job].name}として働く…`); break; }
     case 'burgle': {
       const owners = residents().filter((o) => o.alive && o.home === fid);
@@ -1693,7 +1712,11 @@ export function charActions(t) {
   acts.push({ id: 'attack', label: '殴る' });
   acts.push({ id: 'steal', label: 'こっそり盗む' });
   acts.push({ id: 'threaten', label: '脅して金を出させる' });
-  if (p.job === 'guard' && S.wanted.has(t.id)) acts.push({ id: 'arrest', label: '逮捕する' });
+  if (p.job === 'guard') {
+    const why = arrestGround(t);
+    acts.push(why ? { id: 'arrest', label: `🛡️ 逮捕する（${why}）` } : { id: 'arrest', label: '🛡️ 逮捕する（悪事の証拠がない）', disabled: true });
+  }
+  if (p.job === 'doctor' && t.hp < 85) acts.push({ id: 'treat', label: `🩺 治療してあげる（体力${Math.round(t.hp)}）` });
   return acts;
 }
 
@@ -1762,7 +1785,20 @@ export function doCharAction(t, act) {
   if (act === 'attack') return doAttack(p, t);
   if (act === 'steal') return doSteal(p, t);
   if (act === 'threaten') return doThreaten(p, t);
-  if (act === 'arrest') return doArrest(p, t);
+  if (act === 'arrest') {
+    // 衛兵の仕事：悪事が知られていれば、その場で手配して捕まえる
+    const why = arrestGround(t);
+    if (!why) return toast('逮捕するには、悪事の証拠か手配が必要だ。');
+    S.wanted.add(t.id);
+    return doArrest(p, t);
+  }
+  if (act === 'treat') {
+    p.busyUntil = S.t + 20; p.activity = 'busy'; p.busyStart = S.t;
+    t.hp = clamp(t.hp + 40, 0, 100); addLike(t, p, 8); memo(t, 'よそ者が手当てしてくれた', 'gift');
+    say(t, pick(['ありがとう、楽になったよ。', '助かりました……。', 'おお、痛みが引いた！']));
+    floatText(t, '体力+40', '#7ae07a');
+    return toast(`${t.name}を治療した。`);
+  }
 }
 
 // 会話の結果を反映。返り値 { msgs: [表示する文], attack, flee, close }
@@ -1838,6 +1874,10 @@ export function applyTalkResult(t, r) {
     Wolf.addNote(m); out.msgs.push(`📅 ${m}`);
   }
   if (r.meeting) { Wolf.scheduleMeeting('player', 60, 'player'); out.msgs.push('📣 1時間後に広場で話し合いが開かれる'); }
+  if (r.warrant) {
+    const w = byId(r.warrant);
+    if (w) { S.wanted.add(w.id); const m = `${w.name}を捕まえる（衛兵の仕事）`; Wolf.addNote(m); out.msgs.push(`🛡️ ${w.name}を手配した。近づいて「逮捕する」で捕まえられる`); }
+  }
   if (r.trial) {
     // 処遇の話し合い：話した住民がみんなに声をかける（議題はあなたが出した）
     const m = Wolf.scheduleMeeting(t.id, 60, 'trial', null, { targetId: r.trial, proposer: 'player' });

@@ -1,5 +1,5 @@
 // 起動・入力・UI
-import { TILE, FACILITIES, BOARD_POS, JOBS, ITEMS, LAST_DAY, PLAZA } from './data.js';
+import { TILE, FACILITIES, BOARD_POS, JOBS, ITEMS, LAST_DAY, PLAZA, JOB_PERKS } from './data.js';
 import { LLM } from './llm.js';
 import { walkable, facAt, roofedFacAt } from './world.js';
 import { S, day, timeStr, rel, residents, distTiles, isJailed, clamp, toast, log, say } from './state.js';
@@ -255,7 +255,7 @@ window.addEventListener('keydown', (e) => {
   if (!chatTarget && $('#picker').hidden) {
     const k = e.key.toLowerCase();
     keys.add(k);
-    if (k === 'f') { e.preventDefault(); if (!e.repeat) interactKey(); }
+    if (k === 'f') { e.preventDefault(); if (!e.repeat) interactKey(true); }
     if (k === 'e') { e.preventDefault(); if (!e.repeat) interactPlace(); }
     if (k === ' ') { e.preventDefault(); if (!e.repeat) setSpeed(S.paused ? 1 : 0); }
     if (k === 'escape') closeMenu();
@@ -420,7 +420,7 @@ function placeThing() {
   return null;
 }
 
-function interactKey() {
+function interactKey(fromKey = false) {
   if (!S.player.alive || S.over) return;
   if (S.callout && performance.now() < S.callout.until) {
     const c = S.chars.find((x) => x.id === S.callout.id);
@@ -431,6 +431,7 @@ function interactKey() {
   if (Sim.playerBusy()) { toast('今は手が離せない。'); return; }
   const n = nearestThing();
   if (!n) { toast('近くに話せる人や入れる建物がない。'); return; }
+  if (isTouch() && n.type !== 'char' && !fromKey) { toast('近くに話せる人がいない。建物でできることは青いボタンから。'); return; }
   useThing(n);
 }
 
@@ -744,6 +745,7 @@ function updateUI() {
 
   const n = nearestThing();
   const place = n?.type === 'char' ? placeThing() : null;   // 人の近くでも使える建物など
+  const here = placeThing();   // スマホ：建物の中などでは、青いボタンをずっと出しておく（人が動いてもちらつかない）
   const placeText = (t) => t.type === 'fac' ? `${t.target.name}でできること` : t.type === 'board' ? '掲示板（話し合いの呼びかけ）' : '光る石を拾う';
   let hint = '';
   if (!menuFor && !Sim.playerBusy() && n) {
@@ -752,20 +754,22 @@ function updateUI() {
   }
   const followers = S.chars.filter((c) => c.companion);
   if (followers.length) hint += (hint ? '　' : '') + `🤝 ${followers.map((c) => c.name).join('・')}が同行中`;
-  if (isTouch()) hint = hint.replace(/^F：/, '⭕ ');
+  if (isTouch()) hint = n?.type === 'char' ? hint.replace(/^F：/, '⭕ ') : hint.replace(/^F：[^　]*　?/, '');   // 建物は青いボタンがあるので書かない
   $('#hint').textContent = hint;
   if (isTouch()) {
     const act = $('#act');
     const callout = S.callout && performance.now() < S.callout.until;
-    const label = callout ? '返事' : menuFor ? '閉じる' : !n || Sim.playerBusy() ? '調べる'
-      : n.type === 'char' ? '話す' : n.type === 'fac' ? '入る・使う' : n.type === 'board' ? '掲示板' : '拾う';
+    // 建物などがあるとき：丸ボタン＝話す（人がいなければ薄く）、青いボタン＝建物
+    const charNear = n?.type === 'char';
+    const label = callout ? '返事' : menuFor ? '閉じる' : here ? '話す' : !n || Sim.playerBusy() ? '調べる'
+      : charNear ? '話す' : n.type === 'fac' ? '入る・使う' : n.type === 'board' ? '掲示板' : '拾う';
     if ($('#act-label').textContent !== label) $('#act-label').textContent = label;
-    act.classList.toggle('idle', !callout && !menuFor && (!n || Sim.playerBusy()));
+    act.classList.toggle('idle', !callout && !menuFor && (here ? !charNear : !n) || Sim.playerBusy());
     const a2 = $('#act2');
-    const showA2 = !!place && !menuFor && !callout && !Sim.playerBusy();
+    const showA2 = !!here && !menuFor && !callout && !Sim.playerBusy();
     a2.hidden = !showA2;
     if (showA2) {
-      const l2 = place.type === 'fac' ? place.target.name : place.type === 'board' ? '掲示板' : '光る石';
+      const l2 = here.type === 'fac' ? here.target.name : here.type === 'board' ? '掲示板' : '光る石';
       if ($('#act2-label').textContent !== l2) $('#act2-label').textContent = l2;
     }
     if (joy.id == null) joyHome();
@@ -838,6 +842,7 @@ function renderStatus() {
       <div>腕力：<b>${(p.str + (p.items.includes('weapon') ? 8 : 0)).toFixed(1)}</b></div><div>職業：<b>${JOBS[p.job].name}</b></div>
       ${p.stealth ? `<div>盗みの腕：<b>${p.stealth.toFixed(1)}</b></div>` : ''}
     </div>
+    ${JOB_PERKS[p.job]?.length ? `<div class="box"><h4>${JOBS[p.job].icon} ${JOBS[p.job].name}の能力</h4>${JOB_PERKS[p.job].map((x) => '・' + esc(x)).join('<br>')}</div>` : ''}
     ${S.wanted.has('player') ? '<div class="wanted">🚨 衛兵に手配されている！</div>' : ''}
     <div class="box"><h4>町での立場：${Sim.titleFor(inf)}</h4>
       影響力 ${Math.round(inf.ratio * 100)}%（支持 ${inf.sup}人 ／ 恐怖 ${inf.fear}人 ／ 住民 ${inf.total}人）

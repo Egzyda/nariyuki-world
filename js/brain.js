@@ -114,6 +114,7 @@ function wolfDesc(c) {
   if (c.isWolf) t += `\n【秘密】あなたの正体は人狼。絶対に自分から明かさない。疑われてもとぼけて、${S.wolf.frame ? byName(S.wolf.frame) + 'が怪しいと' : '他の人に'}話をそらす。`;
   return t;
 }
+const isJailedC = (c) => c.jailedUntil != null && S.t < c.jailedUntil;
 const byIdC = (id) => S.chars.find((x) => x.id === id) || null;
 const byName = (id) => S.chars.find((x) => x.id === id)?.name || '誰か';
 
@@ -355,6 +356,7 @@ function respond(c, it, raw) {
   if (pend?.type === 'crimeWhat') {
     const pt = byIdC(pend.targetId);
     if (it.kind === 'meeting') it = { ...it, kind: 'meeting', target: it.target || pt, trial: true, firm: true };
+    else if (it.kind === 'offerArrest') it = { ...it, target: it.target || pt };
     else if (/(通報|衛兵|詰所|知らせ)/.test(raw)) it = { ...it, kind: 'reqReport', target: it.target || pt, ask: false };
     else if (it.kind === 'no' || /(様子|放って|ほっと|そっと|見逃|許して|いいや|やめ|大ごと|今回は)/.test(raw)) it = { ...it, kind: 'letGo' };
   }
@@ -725,6 +727,24 @@ function respond(c, it, raw) {
       else res.say = Dlg.lineN(c, [`${base[0]}特に変わったことはなかったと思う。`, `${base[1]}特に変わったことはありませんでした。`]);
       break;
     }
+    case 'offerArrest': {
+      // よそ者が「自分が捕まえる」と言ったとき
+      const t = (it.target && it.target !== c ? it.target : null) || it.topic || culpritFromMemory(c)?.who || null;
+      if (!t || t === c) { res.say = Dlg.lineN(c, ['え、誰を捕まえるって？', 'ええと、どなたを捕まえるんですか？']); break; }
+      const tn = Dlg.toneOf(c).pol ? `${t.name}さん` : t.name;
+      if (isJailedC(t)) { res.say = Dlg.lineN(c, [`${tn}ならもう牢屋の中だよ。`, `${tn}は、もう牢屋の中ですよ。`]); break; }
+      if (S.player.job !== 'guard') {
+        res.say = Dlg.lineN(c, ['あんたが？ 衛兵でもないのに危ないよ。詰所の衛兵に知らせたほうがいいんじゃない？', 'あなたが、ですか？ 衛兵でもないのに危ないですよ。詰所の衛兵に知らせたほうが……。']);
+        c.pending = { type: 'crimeWhat', targetId: t.id, t: S.t };
+        break;
+      }
+      const saw = Wolf.crimesOf(c, t).length > 0;
+      if (!saw && !Wolf.knownCrimes(t).length && !S.wanted.has(t.id)) { res.say = Dlg.lineN(c, [`${tn}を？ 何かしたの？ 証拠もないのに捕まえるのはどうかな。`, `${tn}を、ですか？ 何か証拠があるんでしょうか……。`]); break; }
+      if (rel(c, t).like >= 50 && !saw) { res.say = Dlg.lineN(c, [`${tn}を捕まえるなんて……{I}には賛成できないよ。`, `${tn}を捕まえるなんて……私は賛成できません。`]); break; }
+      res.say = Dlg.lineN(c, [`衛兵のあんたが捕まえてくれるなら心強いよ！ ${tn}なら、たぶん今は${locName(t)}にいるはず。`, `衛兵のあなたが捕まえてくださるなら安心です。${tn}は、今は${locName(t)}にいると思います。`]);
+      res.warrant = t.id; res.like = gainLike(c, 3);
+      break;
+    }
     case 'letGo': {
       res.say = Dlg.lineN(c, ['そうだね、今回は様子を見よう。また何かあったら考えよう。', 'そうですね、今回は様子を見ましょう。また何かあれば、そのときに。']);
       break;
@@ -739,7 +759,9 @@ function respond(c, it, raw) {
         : c.p.honesty > 0.65 && c.p.aggression > 0.4 ? Dlg.lineN(c, ['{I}は衛兵に知らせるべきだと思う。', '私は、衛兵に知らせるべきだと思います。'])
         : c.p.sociability > 0.55 ? Dlg.lineN(c, ['みんなで話し合って決めたほうがいいんじゃないかな。', '皆さんで話し合って決めるのがいいと思います。'])
         : Dlg.lineN(c, ['うーん、もう少し様子を見てもいい気がする。', 'もう少し様子を見てもいいような気もします。']);
-      res.say = view + Dlg.lineN(c, ['あんたはどうしたい？ 衛兵に知らせる？ みんなで話し合う？ それとも様子を見る？', 'あなたはどうしたいですか？ 衛兵に知らせるか、皆さんで話し合うか、様子を見るか。']);
+      res.say = view + (S.player.job === 'guard'
+        ? Dlg.lineN(c, ['衛兵のあんたが捕まえる？ それともみんなで話し合う？ 様子を見る？', '衛兵のあなたが捕まえますか？ それとも皆さんで話し合うか、様子を見るか。'])
+        : Dlg.lineN(c, ['あんたはどうしたい？ 衛兵に知らせる？ みんなで話し合う？ それとも様子を見る？', 'あなたはどうしたいですか？ 衛兵に知らせるか、皆さんで話し合うか、様子を見るか。']));
       c.pending = { type: 'crimeWhat', targetId: t.id, t: S.t };
       break;
     }
