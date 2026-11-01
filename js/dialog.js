@@ -133,9 +133,14 @@ export function parseIntent(text, residents, self) {
     return { ...r, kind: 'gift', ...gift, then: then && !['unknown', 'question', 'gift'].includes(then.kind) ? then : null };
   }
   // 人狼まわり
-  if (/(会議|話し合|はなしあ|集会|集まろう|集めて|みんなで話|みんなで決め)/.test(t)) return { ...r, kind: 'meeting' };
-  // 「ツヅミの処遇を決めよう」「ツヅミを罰したい」
-  if (r.target && /(処遇|処分|処罰|罰し|罰を|罰金|裁こう|裁判|裁いて|懲罰|どうするか|どうすべき|どうしよう)/.test(t)) return { ...r, kind: 'meeting', trial: true };
+  // 話し合い。「話し合おう」「集めて」ははっきりした頼み、「会議でもする？」は軽い提案（相手が確認してくる）
+  const tentative = /(でもする|でもしよう|でもやる|する[?？]|しない[?？]|やる[?？]|どう[?？]|どうかな|かな|かも|[?？]$)/.test(t);
+  const firm = !tentative && /(開こう|開いて|ひらこう|ひらいて|集めて|集まろう|しよう|やろう|決めよう|お願い|おねがい|してくれ|してほしい|して下さい|してください|開きたい|したい)/.test(t);
+  if (/(会議|話し合|はなしあ|集会|集まろう|集めて|みんなで話|みんなで決め)/.test(t)) return { ...r, kind: 'meeting', firm };
+  // 「ツヅミの処遇を決めよう」「ツヅミを罰したい」（はっきり処遇の話）
+  if (r.target && /(処遇|処分|処罰|罰し|罰を|罰金|裁こう|裁判|裁いて|懲罰)/.test(t)) return { ...r, kind: 'meeting', trial: true, firm };
+  // 相談：「どうするべきだと思う？」「どうしたらいい？」（話の流れの事件について意見を聞く）
+  if (/(どうする|どうすべき|どうしたら|どうしよう|どうすれば|どうしたもの)/.test(t) && !/(食べ|飲|行こ|遊|プレゼント|贈|あげ|渡|買|売)/.test(t)) return { ...r, kind: 'advice' };
   // 「〇〇が夜中に出歩いてるのを見た」＝目撃談として告発
   const who = r.target || (r.self ? self : null);
   if (who && !q && /(見た|みた|出歩|うろつ|出ていく|出て行|襲われ)/.test(t) && /(夜|人狼|狼|犯人|襲)/.test(t)) return { ...r, target: who, kind: 'accuse', evidence: true };

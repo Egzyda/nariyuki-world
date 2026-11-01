@@ -114,11 +114,18 @@ function wolfDesc(c) {
   if (c.isWolf) t += `\n【秘密】あなたの正体は人狼。絶対に自分から明かさない。疑われてもとぼけて、${S.wolf.frame ? byName(S.wolf.frame) + 'が怪しいと' : '他の人に'}話をそらす。`;
   return t;
 }
+const byIdC = (id) => S.chars.find((x) => x.id === id) || null;
 const byName = (id) => S.chars.find((x) => x.id === id)?.name || '誰か';
 
 // ================= プレイヤーとの会話 =================
 export async function talk(c, text, history) {
   const it = Dlg.parseIntent(text, residents(), c);
+  // 「それ」「その件」のように名前を言わなくても、直前の話に出た人（悪いことをした人）を話題にする
+  if (!it.target && history?.length) {
+    const recent = history.slice(-3).reverse().map((h) => h.text).join(' ');
+    const named = residents().filter((o) => o !== c && o.alive && recent.includes(o.name));
+    it.topic = named.find((o) => Wolf.crimesOf(c, o).length) || named.find((o) => Wolf.knownCrimes(o).length) || null;
+  }
   const res = respond(c, it, text);
   // 小さいAIは日本語が崩れやすいので、内容が決まっている返事（誘い・頼みごと等）は
   // 手書きのセリフをそのまま使い、AIには「決まった答えのない雑談」だけを任せる
@@ -341,8 +348,18 @@ function respond(c, it, raw) {
   if (pend && it.yesish && ['unknown', 'question', 'thanks', 'reqReport'].includes(it.kind)) it = { ...it, kind: 'yes' };
   // 値段の交渉中に「〇G払う」と言ったら、それは提示額
   if (pend?.type === 'trade' && it.kind === 'gift' && it.coins) it = { ...it, kind: 'offer' };
-  // 「話し合い？ 何について？」と聞かれたあとに、人の名前を出したら議題になる
-  if (pend?.type === 'meetingWhy' && it.target && !['gift', 'askItem', 'offer'].includes(it.kind)) it = { ...it, kind: 'meeting', trial: true };
+  // 「話し合い？ 何について？」と聞かれたあと：悪いことをした人の名前や「〜のこと」で答えたら、その人のことが議題
+  if (pend?.type === 'meetingWhy' && it.target && !['gift', 'askItem', 'offer', 'no'].includes(it.kind)
+    && (Wolf.knownCrimes(it.target).length || /(について|のこと|の件|処遇|罰|悪|盗|殴|したこと)/.test(raw))) it = { ...it, kind: 'meeting', trial: true, firm: pend.firm };
+  // 「衛兵に知らせる？ 話し合う？ 様子を見る？」と聞かれたあとの答え
+  if (pend?.type === 'crimeWhat') {
+    const pt = byIdC(pend.targetId);
+    if (it.kind === 'meeting') it = { ...it, kind: 'meeting', target: it.target || pt, trial: true, firm: true };
+    else if (/(通報|衛兵|詰所|知らせ)/.test(raw)) it = { ...it, kind: 'reqReport', target: it.target || pt, ask: false };
+    else if (it.kind === 'no' || /(様子|放って|ほっと|そっと|見逃|許して|いいや|やめ|大ごと|今回は)/.test(raw)) it = { ...it, kind: 'letGo' };
+  }
+  if (pend?.type === 'meetingConfirm' && it.kind === 'yes') it = { ...it, kind: 'meeting', target: byIdC(pend.targetId), trial: !!pend.targetId, firm: true };
+  if (pend?.type === 'meetingConfirm' && /(様子|放って|そっと|やっぱり|いいや|やめ)/.test(raw)) it = { ...it, kind: 'letGo' };
   if (pend?.type === 'trade' && it.kind === 'askItem' && it.item === pend.item && it.price != null) it = { ...it, kind: 'offer', coins: it.price };
   const sub = (v) => ({ sub: v });
 
@@ -708,9 +725,27 @@ function respond(c, it, raw) {
       else res.say = Dlg.lineN(c, [`${base[0]}特に変わったことはなかったと思う。`, `${base[1]}特に変わったことはありませんでした。`]);
       break;
     }
+    case 'letGo': {
+      res.say = Dlg.lineN(c, ['そうだね、今回は様子を見よう。また何かあったら考えよう。', 'そうですね、今回は様子を見ましょう。また何かあれば、そのときに。']);
+      break;
+    }
+    case 'advice': {
+      // 相談された住民は、自分の考えを言ってから、どうしたいか聞き返す
+      const t = (it.target && it.target !== c ? it.target : null) || it.topic;
+      if (!t || !Wolf.knownCrimes(t).length) { res.say = ln('ack'); res.mode = 'free'; break; }
+      const tn = Dlg.toneOf(c).pol ? `${t.name}さん` : t.name;
+      const close = rel(c, t).like >= 40;
+      const view = close ? Dlg.lineN(c, [`${tn}とは仲がいいから、あんまり大ごとにはしたくないな……。`, `${tn}とは親しいので、あまり大ごとにはしたくないです……。`])
+        : c.p.honesty > 0.65 && c.p.aggression > 0.4 ? Dlg.lineN(c, ['{I}は衛兵に知らせるべきだと思う。', '私は、衛兵に知らせるべきだと思います。'])
+        : c.p.sociability > 0.55 ? Dlg.lineN(c, ['みんなで話し合って決めたほうがいいんじゃないかな。', '皆さんで話し合って決めるのがいいと思います。'])
+        : Dlg.lineN(c, ['うーん、もう少し様子を見てもいい気がする。', 'もう少し様子を見てもいいような気もします。']);
+      res.say = view + Dlg.lineN(c, ['あんたはどうしたい？ 衛兵に知らせる？ みんなで話し合う？ それとも様子を見る？', 'あなたはどうしたいですか？ 衛兵に知らせるか、皆さんで話し合うか、様子を見るか。']);
+      c.pending = { type: 'crimeWhat', targetId: t.id, t: S.t };
+      break;
+    }
     case 'meeting': {
       // 誰かの悪いことについて：自分で見ていたり、町で知られていたりすれば、好感度が低くても乗ってくれる
-      const t = it.target && it.target !== c ? it.target : null;
+      const t = (it.target && it.target !== c ? it.target : null) || (it.topic && Wolf.knownCrimes(it.topic).length ? it.topic : null);
       if (t && t.alive) {
         const tn = Dlg.toneOf(c).pol ? `${t.name}さん` : t.name;
         const saw = Wolf.crimesOf(c, t).length > 0;
@@ -721,6 +756,12 @@ function respond(c, it, raw) {
           res.trial = t.id; break;
         }
         if (close && !saw) { res.say = Dlg.lineN(c, [`${tn}を吊るし上げるようなことはしたくないな。`, `${tn}を皆で責めるようなことは、したくありません。`]); break; }
+        if ((saw || (known && like >= -10) || like >= 20) && !it.firm && !it.trial) {
+          // 軽い提案なので、開くかどうか確認する
+          res.say = Dlg.lineN(c, [`${tn}のことを、みんなで決めるってこと？ ……そうだね、それもいいかも。広場に集まってもらう？`, `${tn}のことを皆さんで決める、ということですか？ ……それもいいかもしれません。広場に集まってもらいましょうか？`]);
+          c.pending = { type: 'meetingConfirm', targetId: t.id, t: S.t };
+          break;
+        }
         if (saw || (known && like >= -10) || like >= 20) {
           res.say = Dlg.lineN(c, [`${saw ? '{I}も見たしね。' : ''}わかった、${tn}のことをみんなで決めよう。1時間後に広場の噴水の前に声をかけておくよ。`,
             `${saw ? '私も見ましたし……。' : ''}わかりました。${tn}のこと、みんなで決めましょう。1時間後に広場の噴水の前に集まるよう、声をかけておきます。`]);
@@ -735,8 +776,9 @@ function respond(c, it, raw) {
         res.say = Dlg.lineN(c, [`もう${Math.floor((at % 1440) / 60)}時に広場で話し合うことになってるよ。`, `${Math.floor((at % 1440) / 60)}時に広場で話し合うことになっていますよ。`]);
         break;
       }
-      if (S.wolfKnown || like >= 20) { res.say = Dlg.lineN(c, ['わかった、みんなに声をかけるよ。1時間後に広場の噴水の前ね。', 'わかりました。みんなに声をかけます。1時間後に広場の噴水の前で。']); res.meeting = true; }
-      else { res.say = Dlg.lineN(c, ['話し合い？ 何について？ 誰かが何かしたの？', '話し合い……ですか？ 何について、誰のことでしょう。']); c.pending = { type: 'meetingWhy', t: S.t }; }
+      if ((S.wolfKnown || like >= 20) && it.firm) { res.say = Dlg.lineN(c, ['わかった、みんなに声をかけるよ。1時間後に広場の噴水の前ね。', 'わかりました。みんなに声をかけます。1時間後に広場の噴水の前で。']); res.meeting = true; }
+      else if (S.wolfKnown || like >= 20) { res.say = Dlg.lineN(c, ['話し合いか。人狼のこと？ みんなに声をかけようか？', '話し合いですか。人狼のことでしょうか？ 皆さんに声をかけましょうか？']); c.pending = { type: 'meetingConfirm', targetId: null, t: S.t }; }
+      else { res.say = Dlg.lineN(c, ['話し合い？ 何について？ 誰かが何かしたの？', '話し合い……ですか？ 何について、誰のことでしょう。']); c.pending = { type: 'meetingWhy', firm: it.firm, t: S.t }; }
       break;
     }
     case 'whatHappened': {
