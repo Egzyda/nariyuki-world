@@ -335,3 +335,46 @@ body.mobile.menu-open #nearcard { display: none; }
 #hud .ai-use { color: #a8d8ff; }
 .ai-meter { font-size: 12px; color: #a8d8ff; }
 body.mobile.sheet #nearcard { display: none; }
+
+/* ---- 線画アイコン ---- */
+.ic { display: inline-flex; align-items: center; justify-content: center; font-style: normal; }
+.ic-svg { width: 1.15em; height: 1.15em; flex: 0 0 auto; }
+.panel h3 { display: flex; align-items: center; gap: 6px; }
+.panel h3 .ic { color: #c8b878; }
+.panel h3 small { margin-left: 2px; }
+body.mobile .panel h3::after { margin-left: auto; }
+#speed button { display: inline-flex; align-items: center; justify-content: center; gap: 2px; }
+#speed button .ic-svg { width: 18px; height: 18px; }
+#speed button b { font-size: 12px; font-weight: bold; }
+#speed button[data-speed="0"].on { background: #6a5aa0; }
+#mtabs button .ic-svg { width: 22px; height: 22px; }
+#mtabs button { font-size: inherit; gap: 2px; }
+#mtabs .dot { font-style: normal; }
+#hud .hud-ic { width: 13px; height: 13px; vertical-align: -2px; color: #ff9a8a; }
+
+/* ---- いつも見える自分の状態（スマホ） ---- */
+#pstats { display: none; }
+body.mobile #pstats { display: grid; grid-template-columns: auto auto; gap: 3px 10px; position: absolute; right: 6px; top: 6px;
+  background: rgba(0,0,0,.62); padding: 5px 9px; border-radius: 8px; font-size: 12px; pointer-events: none; }
+#pstats .ps { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+#pstats .ic-svg { width: 14px; height: 14px; }
+#pstats .hp { color: #ff6a6a; } #pstats .hu { color: #f0b050; } #pstats .co { color: #ffd84a; } #pstats .fd { color: #d8a868; }
+#pstats .pbar { display: block; width: 32px; height: 6px; background: #111; border-radius: 3px; overflow: hidden; }
+#pstats .pbar b { display: block; height: 100%; }
+#pstats .pbar.hp b { background: #e05050; } #pstats .pbar.hu b { background: #e0a040; }
+#pstats em { font-style: normal; min-width: 18px; color: #eee; }
+#pstats .ps.low em { color: #ff7a6a; font-weight: bold; }
+#pstats .ps.low .ic-svg { animation: flicker 1.2s infinite; }
+body.mobile #hud { max-width: calc(100% - 190px); }
+body.mobile.minimap #hud { max-width: calc(100% - 190px); }
+body.mobile #toasts { top: 64px; }
+
+/* ---- 2つめのボタン（人の近くでも建物を使う） ---- */
+#act2 { position: absolute; right: 16px; bottom: 122px; min-width: 88px; max-width: 150px; height: 46px; border-radius: 23px; pointer-events: auto;
+  display: flex; align-items: center; justify-content: center; gap: 5px; padding: 0 14px;
+  background: rgba(50,90,130,.88); border: 2px solid #a8d8ff; color: #fff; font-weight: bold; font-size: 13px; box-shadow: 0 3px 0 #1a3a5a; }
+#act2:active { transform: translateY(2px); box-shadow: 0 1px 0 #1a3a5a; }
+#act2 .ic-svg { width: 18px; height: 18px; }
+#act2 span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#act2[hidden] { display: none !important; }
+body.touch #hint { max-width: 50%; }

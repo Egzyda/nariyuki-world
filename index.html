@@ -50,8 +50,8 @@
       <div class="bar"><div id="load-bar"></div></div>
       <div id="load-text">準備中…</div>
     </div>
-    <div class="keys touch-only">移動 画面をなぞる（大きく倒すと走る）／話す・調べる 右下の丸ボタン／拡大 2本指</div>
-    <div class="keys pc-only">移動 WASD・矢印（Shiftで走る）／話す・調べる F／停止⇔×1 スペース／掲示板 B／地図 M</div>
+    <div class="keys touch-only">移動 画面をなぞる（大きく倒すと走る）／話す・調べる 右下の丸ボタン（人の近くでも建物は青いボタン）／拡大 2本指</div>
+    <div class="keys pc-only">移動 WASD・矢印（Shiftで走る）／話す・調べる F／建物 E／停止⇔×1 スペース／掲示板 B／地図 M</div>
     <div class="title-foot">
       <span id="ver"></span>
       <span id="update-note"></span>
@@ -65,6 +65,7 @@
   <div id="stage">
     <canvas id="cv"></canvas>
     <div id="hud"></div>
+    <div id="pstats"></div>
     <div id="toasts"></div>
     <div id="menu" hidden></div>
     <div id="busy" hidden></div>
@@ -74,6 +75,7 @@
     <div id="callout" hidden></div>
     <div id="touch">
       <div id="joy"><div id="joy-knob"></div></div>
+      <button id="act2" hidden><i data-icon="door"></i><span id="act2-label">建物</span></button>
       <button id="act"><span id="act-label">調べる</span></button>
     </div>
     <div id="meeting" hidden>
@@ -85,13 +87,13 @@
   <aside id="side">
     <div id="panels">
       <div class="pcol">
-        <section class="panel" id="p-status"><h3>🧍 状態</h3><div id="tab-status" class="pbody"></div></section>
-        <section class="panel" id="p-items"><h3>🎒 持ち物 <small>I</small></h3><div id="tab-items" class="pbody"></div></section>
-        <section class="panel" id="p-notes"><h3>📓 手帳 <small>N</small></h3><div id="tab-notes" class="pbody"></div></section>
+        <section class="panel" id="p-status"><h3><i data-icon="status"></i>状態</h3><div id="tab-status" class="pbody"></div></section>
+        <section class="panel" id="p-items"><h3><i data-icon="items"></i>持ち物 <small>I</small></h3><div id="tab-items" class="pbody"></div></section>
+        <section class="panel" id="p-notes"><h3><i data-icon="notes"></i>手帳 <small>N</small></h3><div id="tab-notes" class="pbody"></div></section>
       </div>
       <div class="pcol">
-        <section class="panel" id="p-people"><h3>👥 住民 <small>クリックで詳細</small></h3><div id="tab-people" class="pbody"></div></section>
-        <section class="panel" id="p-board"><h3>📋 掲示板 <small>B</small></h3>
+        <section class="panel" id="p-people"><h3><i data-icon="people"></i>住民 <small>クリックで詳細</small></h3><div id="tab-people" class="pbody"></div></section>
+        <section class="panel" id="p-board"><h3><i data-icon="board"></i>掲示板 <small>B</small></h3>
           <div id="tab-board" class="pbody">
             <div class="post-form">
               <textarea id="post-text" maxlength="80" placeholder="掲示板に書き込む（Enterで送信／Shift+Enterで改行）"></textarea>
@@ -100,26 +102,26 @@
             <div id="board-list"></div>
           </div>
         </section>
-        <section class="panel" id="p-log"><h3>📜 記録</h3><div id="tab-log" class="pbody"></div></section>
+        <section class="panel" id="p-log"><h3><i data-icon="log"></i>記録</h3><div id="tab-log" class="pbody"></div></section>
       </div>
     </div>
     <div id="speed">
-      <button data-speed="0">⏸</button>
-      <button data-speed="1" class="on">×1</button>
-      <button data-speed="2">×2</button>
-      <button data-speed="4">×4</button>
-      <button id="map-btn" title="地図（M）">🗺</button>
-      <button id="save-btn" title="セーブ">💾</button>
-      <button id="title-btn" title="タイトルへ戻る">🏠</button>
-      <span class="keyhelp">移動 WASD ／ 走る Shift ／ 話す・調べる F ／ 停止⇔×1 Space ／ 地図 M ／ 拡大 ホイール</span>
+      <button data-speed="0" title="一時停止（スペース）"><i data-icon="pause"></i></button>
+      <button data-speed="1" class="on" title="ふつうの速さ"><i data-icon="play"></i><b>1</b></button>
+      <button data-speed="2" title="2倍速"><i data-icon="ff"></i><b>2</b></button>
+      <button data-speed="4" title="4倍速"><i data-icon="fff"></i><b>4</b></button>
+      <button id="map-btn" title="地図（M）"><i data-icon="map"></i></button>
+      <button id="save-btn" title="セーブ"><i data-icon="save"></i></button>
+      <button id="title-btn" title="タイトルへ戻る"><i data-icon="home"></i></button>
+      <span class="keyhelp">移動 WASD ／ 走る Shift ／ 話す・調べる F ／ 建物 E ／ 停止⇔×1 Space ／ 地図 M ／ 拡大 ホイール</span>
     </div>
     <nav id="mtabs">
-      <button data-tab="status">🧍<span>状態</span></button>
-      <button data-tab="items">🎒<span>持ち物</span></button>
-      <button data-tab="notes">📓<span>手帳</span></button>
-      <button data-tab="people">👥<span>住民</span></button>
-      <button data-tab="board">📋<span>掲示板</span><i class="dot" hidden></i></button>
-      <button data-tab="log">📜<span>記録</span></button>
+      <button data-tab="status"><i data-icon="status"></i><span>状態</span></button>
+      <button data-tab="items"><i data-icon="items"></i><span>持ち物</span></button>
+      <button data-tab="notes"><i data-icon="notes"></i><span>手帳</span></button>
+      <button data-tab="people"><i data-icon="people"></i><span>住民</span></button>
+      <button data-tab="board"><i data-icon="board"></i><span>掲示板</span><em class="dot" hidden></em></button>
+      <button data-tab="log"><i data-icon="log"></i><span>記録</span></button>
     </nav>
   </aside>
 </div>

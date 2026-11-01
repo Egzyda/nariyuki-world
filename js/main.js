@@ -10,6 +10,7 @@ import * as Town from './town.js';
 import { VERSION } from './version.js';
 import * as Save from './save.js';
 import { draw, view, resetRenderCache } from './render.js';
+import { icon, fillIcons } from './icons.js';
 
 const $ = (s) => document.querySelector(s);
 const cv = $('#cv');
@@ -30,8 +31,10 @@ const isMobile = () => innerWidth < 820 || (isTouch() && Math.min(innerWidth, in
 function applyLayout() {
   document.body.classList.toggle('touch', isTouch());
   document.body.classList.toggle('mobile', isMobile());
+  view.miniTop = isMobile() ? 64 : 10;   // スマホは右上に自分の状態があるので、地図はその下
 }
 applyLayout();
+fillIcons();
 
 // ---------- タイトル ----------
 (async function setupTitle() {
@@ -204,7 +207,7 @@ $('#update-btn').onclick = async () => {
   btn.disabled = true; $('#update-note').textContent = '最新版を読み込み中…';
   // ブラウザに残っている古いファイルを、サーバーの最新版で置き換えてから再読み込み
   const files = ['./', 'index.html', 'css/style.css', 'version.json', 'manifest.webmanifest',
-    ...['main', 'sim', 'world', 'render', 'sprites', 'state', 'data', 'brain', 'dialog', 'llm', 'llm-worker', 'wolf', 'town', 'version', 'save'].map((f) => `js/${f}.js`)];
+    ...['main', 'sim', 'world', 'render', 'sprites', 'state', 'data', 'brain', 'dialog', 'llm', 'llm-worker', 'wolf', 'town', 'version', 'save', 'icons'].map((f) => `js/${f}.js`)];
   await Promise.all(files.map((f) => fetch(f, { cache: 'reload' }).catch(() => {})));
   location.reload();
 };
@@ -252,6 +255,7 @@ window.addEventListener('keydown', (e) => {
     const k = e.key.toLowerCase();
     keys.add(k);
     if (k === 'f') { e.preventDefault(); if (!e.repeat) interactKey(); }
+    if (k === 'e') { e.preventDefault(); if (!e.repeat) interactPlace(); }
     if (k === ' ') { e.preventDefault(); if (!e.repeat) setSpeed(S.paused ? 1 : 0); }
     if (k === 'escape') closeMenu();
     if (k === 'p') setSpeed(S.paused ? 1 : 0);
@@ -314,7 +318,7 @@ cv.addEventListener('pointermove', (e) => {
   const len = Math.hypot(dx, dy);
   if (len > JOY_R) { dx = dx / len * JOY_R; dy = dy / len * JOY_R; }
   joy.vx = len > 8 ? dx / JOY_R : 0; joy.vy = len > 8 ? dy / JOY_R : 0;
-  joy.run = len > JOY_R * 0.95;
+  joy.run = len > JOY_R * 1.8;   // 輪の外まで大きく引っぱったときだけ走る
   $('#joy-knob').style.transform = `translate(${dx}px, ${dy}px)`;
   $('#joy').classList.toggle('run', joy.run);
 });
@@ -326,6 +330,7 @@ function pointerEnd(e) {
 cv.addEventListener('pointerup', pointerEnd);
 cv.addEventListener('pointercancel', pointerEnd);
 $('#act').addEventListener('click', (e) => { e.preventDefault(); interactKey(); });
+$('#act2').addEventListener('click', (e) => { e.preventDefault(); interactPlace(); });
 $('#callout').addEventListener('click', () => interactKey());
 document.addEventListener('gesturestart', (e) => e.preventDefault());   // iPhoneのページ拡大を止める
 $('#map-btn').onclick = () => { view.showMinimap = !view.showMinimap; };
@@ -346,7 +351,8 @@ function movePlayer(dt) {
   if (!vx && !vy && (joy.vx || joy.vy)) {
     // スティック：倒し具合で速さが変わる（最大まで倒すと走る）
     vx = joy.vx; vy = joy.vy; touchRun = joy.run;
-    len = Math.hypot(vx, vy) / Math.max(0.35, Math.min(1, Math.hypot(vx, vy)));
+    // 倒し具合で歩く速さが変わる（指は細かく動かしにくいので、ふだんは少しゆっくり）
+    len = Math.hypot(vx, vy) / (Math.max(0.35, Math.min(1, Math.hypot(vx, vy))) * 0.8);
   } else len = Math.hypot(vx, vy);
   if (!vx && !vy) return;
   const run = keys.has('shift') || touchRun ? 1.6 : 1;
@@ -397,6 +403,12 @@ function nearestThing() {
   const chars = S.chars.filter((c) => c !== p && c.alive && (isJailed(c) ? inGuard && distTiles(p, c) <= 2.7 : distTiles(p, c) <= 1.6) && Sim.canSee(p, c))
     .sort((a, b) => distTiles(p, a) - distTiles(p, b));
   if (chars.length) return { type: 'char', target: chars[0] };
+  return placeThing();
+}
+
+// 人以外で、いま使えるもの（光る石・掲示板・建物）
+function placeThing() {
+  const p = S.player;
   const m = S.meteor;
   if (m && m.state === 'ground' && Math.hypot(p.x - (m.tx * TILE + 16), p.y - (m.ty * TILE + 16)) / TILE < 1.4) return { type: 'meteor' };
   if (Math.hypot(p.x - (BOARD_POS[0] * TILE + 16), p.y - (BOARD_POS[1] * TILE + 16)) / TILE < 1.6) return { type: 'board' };
@@ -416,6 +428,20 @@ function interactKey() {
   if (Sim.playerBusy()) { toast('今は手が離せない。'); return; }
   const n = nearestThing();
   if (!n) { toast('近くに話せる人や入れる建物がない。'); return; }
+  useThing(n);
+}
+
+// 近くに人がいても、建物でできること（働く・食べる など）を開く
+function interactPlace() {
+  if (!S.player.alive || S.over) return;
+  if (menuFor) closeMenu();
+  if (Sim.playerBusy()) { toast('今は手が離せない。'); return; }
+  const n = placeThing();
+  if (!n) { toast('ここには入れる建物がない。'); return; }
+  useThing(n);
+}
+
+function useThing(n) {
   if (n.type === 'char') openCharMenu(n.target);
   else if (n.type === 'fac') openFacMenu(n.target);
   else if (n.type === 'board') openBoardMenu();
@@ -711,12 +737,15 @@ let boardSig = '';
 function updateUI() {
   const p = S.player;
   if (!p) return;
-  $('#hud').innerHTML = `<b>${day()}日目</b> ${timeStr()}　残り${Math.max(0, LAST_DAY - day())}日　📍${whereText()}${aiLoad != null ? `　🧠AI切替中 ${aiLoad}%` : ''}${S.paused && !chatTarget ? '　⏸ 一時停止中' : ''}${S.droughtUntilDay >= day() ? '　☀️日照り' : ''}${aiBadge()}`;
+  $('#hud').innerHTML = `<b>${day()}日目</b> ${timeStr()}　残り${Math.max(0, LAST_DAY - day())}日　${icon('pin', 'hud-ic')}${whereText()}${aiLoad != null ? `　🧠AI切替中 ${aiLoad}%` : ''}${S.paused && !chatTarget ? '　⏸ 一時停止中' : ''}${S.droughtUntilDay >= day() ? '　☀️日照り' : ''}${aiBadge()}`;
 
   const n = nearestThing();
+  const place = n?.type === 'char' ? placeThing() : null;   // 人の近くでも使える建物など
+  const placeText = (t) => t.type === 'fac' ? `${t.target.name}でできること` : t.type === 'board' ? '掲示板（話し合いの呼びかけ）' : '光る石を拾う';
   let hint = '';
   if (!menuFor && !Sim.playerBusy() && n) {
-    hint = n.type === 'char' ? `F：${n.target.name}と話す・行動` : n.type === 'fac' ? `F：${n.target.name}でできること` : n.type === 'board' ? 'F：掲示板（話し合いの呼びかけ）' : 'F：光る石を拾う';
+    hint = n.type === 'char' ? `F：${n.target.name}と話す・行動` : 'F：' + placeText(n);
+    if (place && !isTouch()) hint += `　E：${placeText(place)}`;
   }
   const followers = S.chars.filter((c) => c.companion);
   if (followers.length) hint += (hint ? '　' : '') + `🤝 ${followers.map((c) => c.name).join('・')}が同行中`;
@@ -729,6 +758,13 @@ function updateUI() {
       : n.type === 'char' ? '話す' : n.type === 'fac' ? '入る・使う' : n.type === 'board' ? '掲示板' : '拾う';
     if ($('#act-label').textContent !== label) $('#act-label').textContent = label;
     act.classList.toggle('idle', !callout && !menuFor && (!n || Sim.playerBusy()));
+    const a2 = $('#act2');
+    const showA2 = !!place && !menuFor && !callout && !Sim.playerBusy();
+    a2.hidden = !showA2;
+    if (showA2) {
+      const l2 = place.type === 'fac' ? place.target.name : place.type === 'board' ? '掲示板' : '光る石';
+      if ($('#act2-label').textContent !== l2) $('#act2-label').textContent = l2;
+    }
     if (joy.id == null) joyHome();
   }
   const bd = document.body.classList;
@@ -752,6 +788,7 @@ function updateUI() {
     if (bn.hidden || bn._t !== S.banner.title) { bn.innerHTML = `<b>${esc(S.banner.title)}</b><div>${esc(S.banner.text)}</div>`; bn._t = S.banner.title; }
     bn.hidden = false;
   } else bn.hidden = true;
+  renderPStats();
   renderStatus();
   renderItems();
   renderPeople();
@@ -762,6 +799,18 @@ function updateUI() {
   updateCallout();
   updateMeetingPanel();
   if (chatTarget) updateChatRel();
+}
+
+// いつも見える自分の状態（体力・満腹度・お金・食料）
+function renderPStats() {
+  const p = S.player;
+  const bar = (v, cls) => `<i class="pbar ${cls}"><b style="width:${clamp(v, 0, 100)}%"></b></i>`;
+  const html = `<span class="ps ${p.hp < 30 ? 'low' : ''}" title="体力">${icon('heart', 'hp')}${bar(p.hp, 'hp')}<em>${Math.round(p.hp)}</em></span>` +
+    `<span class="ps ${p.hunger < 20 ? 'low' : ''}" title="満腹度">${icon('bowl', 'hu')}${bar(p.hunger, 'hu')}<em>${Math.round(p.hunger)}</em></span>` +
+    `<span class="ps" title="所持金">${icon('coin', 'co')}<em>${Math.floor(p.coins)}G</em></span>` +
+    `<span class="ps" title="食料">${icon('bread', 'fd')}<em>${p.food}</em></span>`;
+  const el = $('#pstats');
+  if (el._h !== html) { el.innerHTML = html; el._h = html; }
 }
 
 function aiStatusBox() {

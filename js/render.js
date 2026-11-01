@@ -734,7 +734,7 @@ function drawNight(ctx, w, h, camX, camY, Z) {
 // ================= ミニマップ =================
 function drawMinimap(ctx, w, camX, camY, vw, vh) {
   const mw = miniCache.width, mh = miniCache.height;
-  const x0 = w - mw - 10, y0 = 10;
+  const x0 = w - mw - 10, y0 = view.miniTop ?? 10;
   ctx.globalAlpha = 0.9;
   ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(x0 - 3, y0 - 3, mw + 6, mh + 6);
   ctx.drawImage(miniCache, x0, y0);
