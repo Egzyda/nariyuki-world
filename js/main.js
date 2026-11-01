@@ -1183,7 +1183,7 @@ function updateMeetingPanel() {
     $('#meeting-log').scrollTop = 1e9;
   }
   // 操作部分（段階が変わったときだけ作り直す。入力中の文字は消えない）
-  const cs = m.state + ':' + (m.ruleWait ? m.ruleWait.item.type + (m.ruleWait.item.targetId || m.ruleWait.item.rule?.key || '') : '');
+  const cs = m.state + ':' + (m.ruleWait ? m.ruleWait.item.type + (m.ruleWait.item.targetId || m.ruleWait.item.rule?.key || '') + (m.ruleWait.item.cands || []).join(',') : '');
   if (cs === ctrlSig) return;
   ctrlSig = cs;
   const ctrl = $('#meeting-ctrl');
@@ -1192,10 +1192,13 @@ function updateMeetingPanel() {
     const sayIt = () => { const v = $('#meeting-text').value.trim(); if (v) { Wolf.playerSpeak(v); $('#meeting-text').value = ''; } };
     $('#meeting-say').onclick = sayIt;
     $('#meeting-text').onkeydown = (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); sayIt(); } };
+    // 文字を打っている間は、投票の締め切りを止める
+    $('#meeting-text').onfocus = () => { S.meetingTyping = true; };
+    $('#meeting-text').onblur = () => { S.meetingTyping = false; };
   };
   if (m.state === 'talking' && m.ruleWait?.item.type === 'electionVote') {
     const cands = m.ruleWait.item.cands;
-    ctrl.innerHTML = `<div class="sub2">村長に誰を選ぶ？（あなたの一票）</div>${sayRow}<div class="row votes">` +
+    ctrl.innerHTML = `<div class="sub2">村長に誰を選ぶ？（あなたの一票）「私も立候補する」「〇〇を推薦」で候補を増やせる</div>${sayRow}<div class="row votes">` +
       cands.map((id) => `<button data-r="${id}">${id === 'player' ? '自分' : esc(S.chars.find((c) => c.id === id)?.name || '?')}</button>`).join('') + '<button data-r="abstain" class="ghost">棄権</button></div>';
     bindSay();
     ctrl.querySelectorAll('[data-r]').forEach((b) => b.onclick = () => Wolf.playerRuleVote(b.dataset.r));
@@ -1212,7 +1215,7 @@ function updateMeetingPanel() {
     bindSay();
     ctrl.querySelectorAll('[data-r]').forEach((b) => b.onclick = () => Wolf.playerRuleVote(b.dataset.r));
   } else if (m.state === 'talking') {
-    ctrl.innerHTML = `${sayRow}<div class="row"><button id="meeting-vote">投票に進む</button><button id="meeting-leave" class="ghost">その場を離れる</button></div>`;
+    ctrl.innerHTML = `<div class="sub2">「私も立候補する」「ハルを村長に推薦」「選挙をしよう」「ゴウの処遇も決めよう」「盗んだら罰金にしよう」のように、議題を足せる</div>${sayRow}<div class="row"><button id="meeting-vote">投票に進む</button><button id="meeting-leave" class="ghost">その場を離れる</button></div>`;
     bindSay();
     $('#meeting-vote').onclick = () => Wolf.startVoteNow();
     $('#meeting-leave').onclick = () => Wolf.leaveMeeting();

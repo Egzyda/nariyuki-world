@@ -624,13 +624,15 @@ function meetingTick() {
     else { S.meetingPause = true; m.nextReal = performance.now() + 800; }
   }
   if (m.state === 'talking' && m.playerIn && m.ruleWait) {
+    // 文字を打っている間は待つ（締め切りで勝手に棄権にしない）
+    if (S.meetingTyping) m.ruleWait.deadline = Math.max(m.ruleWait.deadline, performance.now() + 15000);
     if (performance.now() < m.ruleWait.deadline) return;
     m.ruleWait.item.playerVote = 'abstain';
     m.ruleWait = null;
   }
   if (m.state === 'talking' && m.playerIn && performance.now() >= m.nextReal) {
     if (['ruleVote', 'trialVote', 'electionVote'].includes(m.queue[0]?.type) && !m.queue[0].playerVote) {
-      m.ruleWait = { item: m.queue[0], deadline: performance.now() + 25000 };
+      m.ruleWait = { item: m.queue[0], deadline: performance.now() + 60000 };
       return;
     }
     if (m.queue.length) { const line = speakNext(m); m.nextReal = performance.now() + 1600 + (line?.length || 10) * 45; }
@@ -739,6 +741,7 @@ function speakNext(m) {
     const cands = [];
     if (may && (may.isPlayer ? m.playerIn : present.includes(may))) cands.push(may.id);
     if (S.playerCandidate && m.playerIn && !cands.includes('player')) cands.push('player');
+    for (const id of m.extraCands || []) if (!cands.includes(id) && byId(id)?.alive) cands.push(id);   // 推薦された人
     for (const o of present.filter((o) => !cands.includes(o.id)).sort((a, b) => Town.ambition(b) - Town.ambition(a))) {
       if (cands.length >= 3) break;
       if (Town.ambition(o) >= 0.55 || cands.length < 2) cands.push(o.id);
@@ -762,9 +765,15 @@ function speakNext(m) {
     if (m.playerIn && tally[item.playerVote]) tally[item.playerVote].push('あなた');
     m.log.push({ who: '', text: cands.map((id) => `${id === 'player' ? 'よそ者' : byId(id).name}：${tally[id].length}票`).join('／'), cls: 'vote' });
     const enough = m.present.length + (m.playerIn ? 1 : 0) >= Town.quorum();
-    const best = cands.slice().sort((a, b) => tally[b].length - tally[a].length)[0];
+    const top = Math.max(...cands.map((id) => tally[id].length));
+    const tied = cands.filter((id) => tally[id].length === top);
+    const may = Town.mayor();
+    const mayId = may ? (may.isPlayer ? 'player' : may.id) : null;
+    // 同票なら、今の村長が続投。今の村長がいなければくじ引き
+    const best = tied.length > 1 ? (tied.includes(mayId) ? mayId : tied[Math.floor(S.rand() * tied.length)]) : tied[0];
+    const nmB = best === 'player' ? 'よそ者（あなた）' : byId(best).name;
     if (!enough) text = `参加者が住民の半分に足りず、選挙は成立しなかった。`;
-    else { Town.setMayor(best); text = `${tally[best].length}票で、${best === 'player' ? 'よそ者（あなた）' : byId(best).name}が村長に選ばれた！`; }
+    else { Town.setMayor(best); text = tied.length > 1 ? `${top}票で同票！ ${tied.includes(mayId) ? '今の村長の' + nmB + 'が続投' : 'くじ引きで' + nmB + 'が村長'}に決まった。` : `${top}票で、${nmB}が村長に選ばれた！`; }
     S.electionDue = false; S.playerCandidate = false;
     m.log.push({ who: '', text, cls: 'result' });
     return text;
@@ -875,6 +884,7 @@ export function playerSpeak(text) {
   if (!m || !['talking', 'voting'].includes(m.state)) return;
   m.log.push({ who: 'あなた', text, cls: 'me' });
   const t = text.replace(/\s+/g, '');
+  if (agendaChange(m, t, text)) { m.nextReal = Math.min(m.nextReal, performance.now() + 900); return; }
   // 処遇の話し合いの最中：厳しくするか、許すか
   const trialCtx = m.ruleWait?.item.type === 'trialVote' || m.queue.some((i) => i.type.startsWith('trial'));
   if (trialCtx && !Town.parseRule(text)) {
@@ -901,7 +911,10 @@ export function playerSpeak(text) {
   const rule = Town.parseRule(text);
   if (rule) {
     if (m.state === 'voting') m.state = 'talking';
-    m.queue.unshift({ type: 'ruleVote', rule, proposer: 'player', c: presentChars(m)[0] });
+    // いま投票を待っている議題があれば、その次に回す（割り込まない）
+    addItem(m, { type: 'ruleVote', rule, proposer: 'player', c: presentChars(m)[0] });
+    const r1 = presentChars(m)[0];
+    if (r1) addItem(m, { type: 'react', c: r1, text: pol(r1) ? `よそ者の方から「${Town.describe(rule).replace(/（.*）/, '')}」という提案です。あとで決をとりましょう。` : `よそ者から「${Town.describe(rule).replace(/（.*）/, '')}」って提案が出た。あとで決をとろう。` }, true);
     m.nextReal = Math.min(m.nextReal, performance.now() + 900);
     return;
   }
@@ -945,6 +958,67 @@ export function playerSpeak(text) {
 }
 
 const keepRuleItems = (q) => q.filter((i) => i.type === 'rule' || i.type === 'ruleVote' || i.type.startsWith('trial') || i.type.startsWith('election'));
+
+// 議題を足す：いま投票待ちの議題があれば、その後ろに入れる（front=true なら先頭近く）
+function addItem(m, item, front = false) {
+  // 投票待ちのあいだの返事は、その場ですぐ言う
+  if (item.type === 'react' && m.ruleWait) { addLine(m, item.c, item.text); return; }
+  if (m.state === 'voting') m.state = 'talking';
+  const i = m.ruleWait ? 1 : 0;
+  if (front || m.ruleWait) m.queue.splice(Math.min(i, m.queue.length), 0, item);
+  else m.queue.push(item);
+}
+
+// 話し合いの途中で、議題や選択肢を変える（立候補・推薦・辞退・選挙・処遇・新しい議題）
+function agendaChange(m, t, raw) {
+  const first = presentChars(m)[0];
+  const say1 = (a, b) => { if (first) addItem(m, { type: 'react', c: first, text: pol(first) ? b : a }, true); };
+  const elec = m.ruleWait?.item.type === 'electionVote' ? m.ruleWait.item : m.queue.find((i) => i.type === 'electionVote');
+  const elecPending = elec || m.queue.some((i) => i.type === 'election');
+  // 立候補をやめる
+  if (/(立候補|候補)/.test(t) && /(やめ|取り下げ|辞退|降り)/.test(t)) {
+    S.playerCandidate = false;
+    if (elec) elec.cands = elec.cands.filter((id) => id !== 'player');
+    say1('よそ者は立候補を取り下げた。', 'よそ者の方は立候補を取り下げられました。');
+    return true;
+  }
+  // 自分が立候補する
+  if (/(立候補|私が村長|俺が村長|僕が村長|自分が村長|村長になりたい|村長をやる|村長になる)/.test(t)) {
+    S.playerCandidate = true;
+    if (!S.rules.mayorOffice) {
+      addItem(m, { type: 'ruleVote', rule: { key: 'mayorOffice', value: true }, proposer: 'player', c: first });
+      say1('村長を置くかどうか、まず決めないとな。', 'まずは村長を置くかどうかを決めましょう。');
+      return true;
+    }
+    if (elec) { if (!elec.cands.includes('player')) elec.cands.push('player'); }
+    else if (!elecPending) { S.electionDue = true; addItem(m, { type: 'election', c: first }); }
+    say1('よそ者も立候補か。面白くなってきたな。', 'よそ者の方も立候補されるそうです。');
+    return true;
+  }
+  // 誰かを推薦する（「ハルを村長に推薦する」「ミナも候補に」）
+  const named = residents().find((o) => o.alive && t.includes(o.name));
+  if (named && /(推薦|推す|候補に|村長に(したい|すべき|ふさわしい|向いて))/.test(t) && S.rules.mayorOffice) {
+    if (elec) { if (!elec.cands.includes(named.id)) elec.cands.push(named.id); }
+    else if (!elecPending) { S.electionDue = true; addItem(m, { type: 'election', c: first }); m.extraCands = [...(m.extraCands || []), named.id]; }
+    else m.extraCands = [...(m.extraCands || []), named.id];
+    if (m.present.includes(named.id)) addItem(m, { type: 'react', c: named, text: rel(named, 'player').like >= 0 ? (pol(named) ? '……推していただけるなら、やってみます。' : '……推されたなら、やってやるよ。') : '勝手に人を推すなよ。' }, true);
+    return true;
+  }
+  // 選挙をしよう
+  if (/(選挙|村長を(選び直|変え|替え|やめさせ)|不信任)/.test(t) && S.rules.mayorOffice && !elecPending) {
+    S.electionDue = true; addItem(m, { type: 'election', c: first });
+    say1('よし、このあと村長の選挙もやろう。', 'では、このあと村長の選挙も行いましょう。');
+    return true;
+  }
+  // 誰かの処遇も決めよう
+  if (named && /(処遇|処分|罰|裁|どうするか決め)/.test(t) && !(m.trials || []).some((x) => x.targetId === named.id)) {
+    (m.trials ||= []).push({ targetId: named.id, proposer: 'player' });
+    addItem(m, { type: 'trial', targetId: named.id, proposer: 'player', c: first });
+    return true;
+  }
+  void raw;
+  return false;
+}
 
 // 決まりの採決でのプレイヤーの一票
 export function playerRuleVote(v) {
