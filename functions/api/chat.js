@@ -7,7 +7,7 @@
 const DEFAULT_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 
 export async function onRequestGet({ env }) {
-  return Response.json({ ai: !!env.AI });
+  return Response.json({ ai: !!env.AI, model: env.AI_MODEL || DEFAULT_MODEL });
 }
 
 export async function onRequestPost({ request, env }) {
@@ -20,7 +20,8 @@ export async function onRequestPost({ request, env }) {
   const temperature = Math.min(Math.max(Number(body.temperature) || 0.8, 0), 1.5);
   try {
     const r = await env.AI.run(env.AI_MODEL || DEFAULT_MODEL, { messages, max_tokens, temperature });
-    return Response.json({ text: r.response ?? '' });
+    // usage（使ったトークン数）を返して、ゲーム側で今日の無料枠の使用量を計算する
+    return Response.json({ text: r.response ?? '', usage: r.usage || null });
   } catch (e) {
     const msg = String(e);
     // 無料枠（1日1万ニューロン）を使い切ると 4006 エラーになる。ゲーム側に 429 で知らせる

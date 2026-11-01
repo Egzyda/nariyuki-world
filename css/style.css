@@ -264,7 +264,7 @@ body.mobile #panels { display: none; }
 body.mobile.sheet #panels { display: flex; flex-direction: column; flex: 0 0 46dvh; height: 46dvh; padding: 4px; }
 body.mobile .pcol { display: contents; }
 body.mobile .panel { display: none; }
-body.mobile .panel.active { display: flex; flex: 1 1 auto; max-height: none; }
+body.mobile .panel.active { display: flex; flex: 1 1 auto !important; max-height: none !important; min-height: 0; }
 body.mobile .panel h3 { font-size: 14px; padding: 8px 12px; cursor: pointer; }
 body.mobile .panel h3 small { display: none; }
 body.mobile .panel h3::after { content: '✕ 閉じる'; float: right; font-size: 12px; color: #9a9; font-weight: normal; }
@@ -327,3 +327,11 @@ body.mobile .mode-card:hover { transform: none; }
 body.mobile #result-box { margin: 12px; padding: 20px 14px; }
 body.mobile #result-box table { font-size: 13px; }
 body.mobile.menu-open #nearcard { display: none; }
+
+/* クラウドAIの状態 */
+.msg.fallback::after { content: attr(data-tag); display: block; margin-top: 3px; font-size: 10px; color: #8a6a3a; }
+#hud .ai-out { color: #ffb070; }
+#hud .ai-warn { color: #ff9a8a; }
+#hud .ai-use { color: #a8d8ff; }
+.ai-meter { font-size: 12px; color: #a8d8ff; }
+body.mobile.sheet #nearcard { display: none; }

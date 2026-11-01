@@ -46,7 +46,11 @@ applyLayout();
   }
   const api = await LLM.probeApi();
   const apiInput = $('.api input');
-  if (api) apiInput.checked = true;
+  if (api) {
+    apiInput.checked = true;
+    const pct = LLM.usagePct();
+    if (pct > 0) $('#api-note').textContent = `今日の無料枠：約${pct}%使用${pct >= 100 ? '（使い切り。朝9時に回復）' : '（朝9時にリセット）'}`;
+  }
   else {
     $('.api').classList.add('disabled'); apiInput.disabled = true;
     $('#api-note').textContent = '（未設定：Cloudflare Pages に Workers AI を追加すると使えます。READMEを参照）';
@@ -56,7 +60,13 @@ applyLayout();
 
 // クラウドAIの無料枠が切れたら、ブラウザ内AIに切り替える
 LLM.onQuota = () => {
-  if (LLM.switching) return;
+  if (LLM.switching || LLM.mode !== 'api') return;
+  // スマホやWebGPUのないブラウザでは、5GBのブラウザ内AIは読み込まずにAIなしへ
+  if (!LLM.hasWebGPU() || (isMobile() && isTouch())) {
+    LLM.fallbackNone();
+    toast('☁️ クラウドAIの今日の無料枠を使い切りました。朝9時（日本時間）に回復するまで、AIなしの返事になります');
+    return;
+  }
   toast(LLM.hasWebGPU() ? '☁️ クラウドAIの今日の無料枠を使い切りました。ブラウザ内AIに切り替えます（読み込み中はAIなしで動きます）'
     : '☁️ クラウドAIの今日の無料枠を使い切りました。このブラウザではブラウザ内AIが使えないため、AIなしで続けます');
   LLM.switchToBrowser((p) => { aiLoad = Math.round(p * 100); });
@@ -69,7 +79,7 @@ async function prepareAI() {
   const mode = !sel || sel.disabled ? 'none' : sel.value;
   $('#start').disabled = true;
   if (LLM.ready && LLM.mode === mode) return;
-  if (mode === 'none') { LLM.mode = 'none'; return; }
+  if (mode === 'none') { LLM.mode = 'none'; LLM.chosen = 'none'; LLM.quotaOut = false; return; }
   {
     $('#loading').hidden = false;
     try {
@@ -150,6 +160,7 @@ function startGame() {
   else toast('WASD/矢印で移動（Shiftで走る）。人や建物の中で F キー。');
   toast('目の前の🏡があなたの家。タンスにお金をしまえる。');
   if (LLM.available()) toast('住民はAIで話します。自由に話しかけてみよう。');
+  if (LLM.mode === 'api' && LLM.usagePct() >= 80) toast(`☁️ クラウドAIの今日の無料枠は、もう約${LLM.usagePct()}%使っています`);
 }
 
 // ---------- タイトルの背景：本物の町をゆっくり眺める ----------
@@ -192,7 +203,7 @@ $('#update-btn').onclick = async () => {
   const btn = $('#update-btn');
   btn.disabled = true; $('#update-note').textContent = '最新版を読み込み中…';
   // ブラウザに残っている古いファイルを、サーバーの最新版で置き換えてから再読み込み
-  const files = ['./', 'index.html', 'css/style.css', 'version.json',
+  const files = ['./', 'index.html', 'css/style.css', 'version.json', 'manifest.webmanifest',
     ...['main', 'sim', 'world', 'render', 'sprites', 'state', 'data', 'brain', 'dialog', 'llm', 'llm-worker', 'wolf', 'town', 'version', 'save'].map((f) => `js/${f}.js`)];
   await Promise.all(files.map((f) => fetch(f, { cache: 'reload' }).catch(() => {})));
   location.reload();
@@ -498,10 +509,12 @@ function openChat(t) {
   $('#chat').hidden = false;
   $('#chat-name').textContent = t.name + `（${JOBS[t.job].name}）`;
   $('#chat-log').innerHTML = '';
-  for (const h of t.chatLog.slice(-10)) addMsg(h.who === 'player' ? 'me' : 'them', h.text);
+  for (const h of t.chatLog.slice(-10)) markFallback(addMsg(h.who === 'player' ? 'me' : 'them', h.text), h.fb);
   if (!t.chatLog.length) addMsg('sys', `${t.name}に話しかけた。`);
-  $('#chat-note').textContent = LLM.available()
-    ? 'AIが口調をつけて返事します。誘う・頼む・渡す・売り買い・噂を吹き込む…なんでもどうぞ。'
+  $('#chat-note').textContent = LLM.quotaOut
+    ? '☁️ 今日のクラウドAIの無料枠を使い切ったため、AIなしで返事しています（朝9時に回復）。'
+    : LLM.available()
+    ? 'AIが口調をつけて返事します。誘う・頼む・渡す・売り買い・噂を吹き込む…なんでもどうぞ。' + (LLM.mode === 'api' ? `（☁️ 今日の無料枠 約${LLM.usagePct()}%使用）` : '')
     : '例：「3Gあげるから一緒に来て」「花束どうぞ」「〇〇ってどんな人？」「研究所はどこ？」「おごるよ」';
   const chips = $('#chat-chips');
   chips.innerHTML = '';
@@ -555,6 +568,13 @@ function updateChatRel() {
   $('#chat-rel').textContent = `好感度 ${Math.round(r.like)} ／ 恐怖 ${Math.round(r.fear)} ／ 所持金 ${Math.floor(S.player.coins)}G`;
 }
 
+// AIなしで作った返事に小さな印をつける（クラウドAIを選んでいるのに、無料枠切れなどでAIが使えなかったとき）
+function markFallback(el, tag) {
+  if (!tag) return;
+  el.classList.add('fallback');
+  el.dataset.tag = tag;
+  el.title = /無料枠/.test(tag) ? '今日のクラウドAIの無料枠を使い切ったため、AIなしの返事です' : 'AIの返事がうまく作れなかったため、AIなしの返事です';
+}
 function addMsg(cls, text) {
   const d = document.createElement('div');
   d.className = 'msg ' + cls; d.textContent = text;
@@ -576,9 +596,10 @@ async function sendChat() {
   try { r = await Brain.talk(t, text, t.chatLog); } catch (e) { console.error(e); r = { say: '……？', action: 'none', like: 0 }; }
   typingEl.remove();
   if (chatTarget !== t) { chatBusy = false; return; }
-  t.chatLog.push({ who: 'player', text }, { who: 'them', text: r.say });
+  const fbTag = LLM.chosen && LLM.chosen !== 'none' && r.via !== 'ai' ? (LLM.quotaOut ? '📜 AIなし（無料枠切れ）' : '📜 AIなし') : null;
+  t.chatLog.push({ who: 'player', text }, { who: 'them', text: r.say, ...(fbTag ? { fb: fbTag } : {}) });
   if (t.chatLog.length > 20) t.chatLog.splice(0, 2);
-  addMsg('them', r.say);
+  markFallback(addMsg('them', r.say), fbTag);
   const out = Sim.applyTalkResult(t, r);
   renderTradeBar();
   for (const m of out.msgs) { addMsg('sys', m); toast(m); }
@@ -678,11 +699,19 @@ function whereText() {
   return '町の通り';
 }
 
+// 画面左上：クラウドAIの状態（無料枠の使用量・切れたらAIなし）
+function aiBadge() {
+  if (LLM.checkQuotaReset()) toast('☁️ クラウドAIの無料枠が回復しました。住民がまたAIで話します');
+  if (LLM.quotaOut && LLM.mode === 'none') return '　<span class="ai-out">📜AIなし（無料枠切れ）</span>';
+  if (LLM.mode === 'api') { const p = LLM.usagePct(); return p >= 50 ? `　<span class="${p >= 85 ? 'ai-warn' : 'ai-use'}">☁️${p}%</span>` : ''; }
+  return '';
+}
+
 let boardSig = '';
 function updateUI() {
   const p = S.player;
   if (!p) return;
-  $('#hud').innerHTML = `<b>${day()}日目</b> ${timeStr()}　残り${Math.max(0, LAST_DAY - day())}日　📍${whereText()}${aiLoad != null ? `　🧠AI切替中 ${aiLoad}%` : ''}${S.paused && !chatTarget ? '　⏸ 一時停止中' : ''}${S.droughtUntilDay >= day() ? '　☀️日照り' : ''}`;
+  $('#hud').innerHTML = `<b>${day()}日目</b> ${timeStr()}　残り${Math.max(0, LAST_DAY - day())}日　📍${whereText()}${aiLoad != null ? `　🧠AI切替中 ${aiLoad}%` : ''}${S.paused && !chatTarget ? '　⏸ 一時停止中' : ''}${S.droughtUntilDay >= day() ? '　☀️日照り' : ''}${aiBadge()}`;
 
   const n = nearestThing();
   let hint = '';
@@ -735,6 +764,16 @@ function updateUI() {
   if (chatTarget) updateChatRel();
 }
 
+function aiStatusBox() {
+  if (!LLM.chosen || LLM.chosen === 'none') return '';
+  const u = LLM.usage(), pct = LLM.usagePct();
+  const now = LLM.quotaOut && LLM.mode === 'none' ? '📜 無料枠切れ：AIなしで返事中（朝9時に回復）'
+    : LLM.mode === 'api' ? '☁️ クラウドAIで返事中' : LLM.mode === 'webllm-large' ? '🧠 ブラウザ内AIで返事中' : '📜 AIなしで返事中';
+  return `<div class="box"><h4>住民の頭脳</h4>${now}
+    ${LLM.chosen === 'api' || LLM.quotaOut ? `<div class="ai-meter">今日の無料枠：約${pct}%使用（AIへの依頼 ${u.calls}回）</div>${meter(pct, 100, pct >= 85 ? '#e06050' : '#5a9ad0')}<small style="color:#999">毎朝9時（日本時間）にリセット。数字は目安です</small>` : ''}
+  </div>`;
+}
+
 function renderStatus() {
   const p = S.player;
   const inf = Sim.influence('player');
@@ -763,6 +802,7 @@ function renderStatus() {
       ${S.taxDebt.player ? `<br><span class="wanted">税金の滞納：${S.taxDebt.player}G（役場で払える）</span>` : ''}
       ${Wolf.meetingActive() ? `<br>📣 ${Math.floor((S.meeting.at % 1440) / 60)}時から広場で話し合い${S.meeting.agenda.length ? `（議題：${S.meeting.agenda.map((a) => Town.describe(a.rule)).join('、')}）` : ''}` : ''}
     </div>
+    ${aiStatusBox()}
     `;
   const ub = $('#tab-status [data-use]');
   if (ub) ub.onclick = () => Sim.useItem(S.player, ub.dataset.use);

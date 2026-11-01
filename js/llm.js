@@ -5,6 +5,19 @@ export const MODELS = {
   'webllm-large': { label: 'ブラウザ内AI（高品質 7B / 約5GB）', id: 'Qwen2.5-7B-Instruct-q4f16_1-MLC' },
 };
 
+// Workers AI の無料枠：1日 10,000 ニューロン（日本時間 朝9時＝UTC 0時 にリセット）
+export const DAILY_NEURONS = 10000;
+// 100万トークンあたりのニューロン数 [入力, 出力]（Cloudflare の料金表より）
+const NEURON_RATES = {
+  '@cf/meta/llama-3.3-70b-instruct-fp8-fast': [26668, 204805],
+  '@cf/qwen/qwen3-30b-a3b-fp8': [4625, 30475],
+  '@cf/google/gemma-4-26b-a4b-it': [9091, 27273],
+  '@cf/meta/llama-3.1-8b-instruct-fp8-fast': [4119, 34868],
+  '@cf/meta/llama-3.1-8b-instruct-awq': [11161, 24215],
+};
+const USAGE_KEY = 'nariyuki-ai-usage';
+const utcDay = () => new Date().toISOString().slice(0, 10);
+
 export const LLM = {
   mode: 'none',
   ready: false,
@@ -19,12 +32,15 @@ export const LLM = {
       const res = await fetch('./api/chat', { method: 'GET' });
       if (!res.ok) return false;
       const j = await res.json();
+      if (j.model) this.apiModel = j.model;
       return !!j.ai;
     } catch { return false; }
   },
 
   async init(mode, onProgress = () => {}) {
     this.mode = mode;
+    this.chosen = mode;          // タイトルで選んだ頭脳（無料枠切れで変わっても覚えておく）
+    this.quotaOut = false;
     this.ready = false;
     if (mode === 'none') return true;
     if (mode === 'api') { this.ready = true; return true; }
@@ -67,6 +83,42 @@ export const LLM = {
     this.switching = false;
   },
 
+  // 無料枠切れ → AIなしで続ける（スマホなど、ブラウザ内AIが使えないとき）
+  fallbackNone() {
+    if (this.mode !== 'api') return;
+    this.mode = 'none';
+    this.quotaOut = true;
+    this.quotaDay = utcDay();
+  },
+  // 日付が変わって（日本時間 朝9時）無料枠が戻ったら、クラウドAIに戻す
+  checkQuotaReset() {
+    if (this.quotaOut && this.mode === 'none' && !this.switching && this.quotaDay !== utcDay()) {
+      this.quotaOut = false; this.mode = 'api'; this.ready = true; this.apiFails = 0;
+      return true;
+    }
+    return false;
+  },
+
+  // ---- 今日のクラウドAI使用量（目安） ----
+  usage() {
+    try {
+      const u = JSON.parse(localStorage.getItem(USAGE_KEY) || 'null');
+      if (u && u.day === utcDay()) return u;
+    } catch {}
+    return { day: utcDay(), neurons: 0, calls: 0 };
+  },
+  usagePct() { return Math.min(100, Math.round(this.usage().neurons / DAILY_NEURONS * 100)); },
+  addUsage(messages, text, usage) {
+    // usage が返ってこないときは、日本語1文字≒1トークンで見積もる
+    const inTok = usage?.prompt_tokens ?? messages.reduce((a, m) => a + String(m.content).length + 4, 0);
+    const outTok = usage?.completion_tokens ?? String(text || '').length;
+    const [ri, ro] = NEURON_RATES[this.apiModel] || NEURON_RATES['@cf/meta/llama-3.3-70b-instruct-fp8-fast'];
+    const u = this.usage();
+    u.neurons += (inTok * ri + outTok * ro) / 1e6;
+    u.calls += 1;
+    try { localStorage.setItem(USAGE_KEY, JSON.stringify(u)); } catch {}
+  },
+
   available() { return this.mode !== 'none' && this.ready; },
   // 日本語を自然に書き換えられるだけの大きさがあるモデルか
   strong() { return this.available() && (this.mode === 'webllm-large' || this.mode === 'api'); },
@@ -89,11 +141,13 @@ export const LLM = {
           if (!res.ok) {
             // 429 = 今日の無料枠を使い切った。他のエラーも3回続いたら切り替える
             this.apiFails = (this.apiFails || 0) + 1;
+            if (res.status === 429) { const u = this.usage(); u.neurons = Math.max(u.neurons, DAILY_NEURONS); try { localStorage.setItem(USAGE_KEY, JSON.stringify(u)); } catch {} }
             if (res.status === 429 || this.apiFails >= 3) this.onQuota?.();
             return null;
           }
           this.apiFails = 0;
           const j = await res.json();
+          this.addUsage(messages, j.text, j.usage);
           return j.text ?? null;
         }
         const r = await this.engine.chat.completions.create({

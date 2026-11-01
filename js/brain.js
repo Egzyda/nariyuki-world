@@ -123,9 +123,11 @@ export async function talk(c, text, history) {
   // 小さいAIは日本語が崩れやすいので、内容が決まっている返事（誘い・頼みごと等）は
   // 手書きのセリフをそのまま使い、AIには「決まった答えのない雑談」だけを任せる
   const useAI = LLM.available() && res.say && (res.mode === 'free' || LLM.strong());
+  // via: 'ai' = AIが返事した／'rule' = AIなしの返事（無料枠切れ・AIの返事が使えなかったときも）
+  res.via = 'rule';
   if (useAI) {
     const out = await llmPhrase(c, text, history, res);
-    if (out) res.say = out;
+    if (out) { res.say = out; res.via = 'ai'; }
   } else {
     await new Promise((r) => setTimeout(r, 350 + rnd() * 450));
   }
