@@ -8,6 +8,7 @@ import * as Dlg from './dialog.js';
 import * as Brain from './brain.js';
 import * as Sim from './sim.js';
 import * as Town from './town.js';
+import * as Psyche from './psyche.js';
 
 const STANCES = ['peaceful', 'work', 'scheme', 'aggressive'];
 const DOS = ['meet', 'eat', 'drink', 'visit', 'gift', 'confront', 'avoid', 'work', 'rest', 'player'];
@@ -27,7 +28,7 @@ function brief(c) {
   const diary = (c.diary || []).slice(-2).join(' / ') || 'なし';
   const pl = rel(c, 'player');
   return `- ${c.name}（${JOBS[c.job].name}・${c.female ? '女' : '男'}）${Brain.personaOf(c)} 所持金${Math.floor(c.coins)}G${Brain.needs(c) ? '・' + Brain.needs(c) : ''}。` +
-    `気持ち：${Brain.relSummary(c)}。よそ者への好感${Math.round(pl.like)}。最近：${mem}。これまでの日記：${diary}`;
+    `気持ち：${Brain.relSummary(c)}。よそ者への好感${Math.round(pl.like)}。最近：${mem}。これまでの日記：${diary}。${Psyche.describeFor(c)}`;
 }
 
 // ================= 朝：全員の1日の予定 =================

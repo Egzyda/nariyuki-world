@@ -3,6 +3,9 @@
 // 占い師自身が人狼のこともある（そのときは罪のない人をわざと名指しする）。
 import { S, day, chance, pick, rel, addLike, byId, residents, isJailed, memo, log, post, toast } from './state.js';
 import * as Wolf from './wolf.js';
+import * as Laws from './laws.js';
+import * as Sim from './sim.js';
+import { distTiles } from './state.js';
 
 export const seer = () => residents().find((c) => c.job === 'seer' && c.alive) || null;
 const st = () => (S.seer ||= { announced: false, named: [], cred: 0.6, lastSay: 0 });
@@ -74,6 +77,7 @@ export function askReading(t) {
   if (!s) return toast('占い師がいない。');
   if (p.coins < 5) return toast('占ってもらうには5G必要だ。');
   p.coins -= 5; s.coins += 5;
+  Laws.enforce(p, 'fortune', residents().filter((o) => o.alive && o !== s && distTiles(o, p) < 7), Sim.lawHooks);
   const black = readFor(s, t);
   const say = black
     ? (pol(s) ? `……${t.name}さんに、獣の影が重なって見えます。` : `……${t.name}に、獣の影が重なって見える。`)

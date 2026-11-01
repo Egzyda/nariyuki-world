@@ -5,6 +5,7 @@ import {
 import { facAt } from './world.js';
 import * as Sim from './sim.js';
 import * as Wolf from './wolf.js';
+import * as Laws from './laws.js';
 
 // ---- 法律 ----
 // 普通の町：盗み・暴力は禁止、牢屋・村長・衛兵あり、決め方は「決まりの重さで必要な賛成を変える」
@@ -51,6 +52,8 @@ const METHOD = {
 export function threshold(rule) {
   const m = METHOD[S.rules.method];
   if (!m) return 3 / 4;   // 決め方が決まっていない町では、最初は4分の3の賛成が必要
+  if (rule.key === 'law') return m[Laws.isHeavy(rule.value) ? 'heavy' : 'light'];
+  if (rule.key === 'repeal') return m.heavy;
   return m[WEIGHT[rule.key] || 'heavy'];
 }
 export const ratioText = (r) => (r <= 0.5 ? '過半数' : Math.abs(r - 2 / 3) < 0.01 ? '3分の2以上' : Math.abs(r - 3 / 4) < 0.01 ? '4分の3以上' : '5分の4以上');
@@ -66,6 +69,8 @@ const mayorWorking = () => { const m = mayor(); return m && !isJailed(m); };
 export function describe(rule) {
   const { key, value } = rule;
   if (key === 'tax') return value === 0 ? '税金をなくす' : `税金を1日${value}Gにする`;
+  if (key === 'law') return `${Laws.describe(value)}という法律を作る`;
+  if (key === 'repeal') { const l = Laws.byId(value); return `法律「${l ? Laws.describe(l) : '？'}」をやめる`; }
   if (key === 'method') return `法律の決め方を「${METHOD[value]?.label || value}」にする`;
   const on = {
     theftBan: '盗みの禁止（見つかれば手配され、衛兵に捕まる）', violenceBan: '暴力・脅しの禁止（見つかれば手配され、衛兵に捕まる）',
@@ -84,6 +89,7 @@ export function rulesText() {
   if (!r.jail) list.push('牢屋は使わない');
   if (!r.mayorOffice) list.push('村長なし');
   if (!r.guardOffice) list.push('衛兵なし');
+  for (const t of Laws.listText()) list.push(`法律：${t}`);
   if (r.curfew) list.push('夜間外出禁止');
   if (r.patrol) list.push('夜の見回り強化');
   if (r.ration) list.push('食料の配給');
@@ -113,6 +119,9 @@ export function parseRule(text) {
   else if (/(決め方|多数決|過半数|3分の2|三分の二|4分の3|四分の三|全員一致)/.test(t) && /(決め|しよう|にする|変え)/.test(t)) {
     rule = { key: 'method', value: /過半数|多数決/.test(t) ? 'majority' : /(4分の3|四分の三|慎重|全員)/.test(t) ? 'strict' : 'standard' };
   }
+  // 「誰が」「どんな罰で」まで言っていれば、組み立て式の法律として読む
+  const explicit = /(罰金|牢屋|追放|むち|鞭|没収|ただ働き|強制労働|よそ者|余所者|村長以外|貧乏|貧しい|金持ち|夜|酒|占い|決闘|悪口)/.test(t);
+  if (!rule || explicit) { const lr = Laws.parse(text); if (lr) return lr; }
   if (!rule || r[rule.key] === rule.value) return null;
   return rule;
 }
@@ -123,6 +132,12 @@ export function support(c, rule, proposer) {
   const poor = c.coins < 8;
   const { key, value } = rule;
   let s;
+  if (key === 'law' || key === 'repeal') {
+    const law = key === 'law' ? value : Laws.byId(value);
+    s = law ? Laws.support(c, law) : 0.5;
+    if (key === 'repeal') s = 1 - s;
+    return clamp(s + bias(c, proposer), 0, 1);
+  }
   switch (key) {
     case 'curfew': s = 0.25 + fear + c.p.honesty * 0.2 - c.p.sociability * 0.15 - (c.isWolf ? 0.6 : 0); break;
     case 'patrol': s = 0.3 + fear + c.p.honesty * 0.15 - (c.job === 'guard' ? 0.15 : 0) - (c.isWolf ? 0.5 : 0); break;
@@ -142,18 +157,29 @@ export function support(c, rule, proposer) {
     default: s = 0.5;
   }
   if (key !== 'tax' && key !== 'method' && !value) s = 1 - s;
-  if (proposer === 'player') s += (Wolf.trust(c, 'player') - 0.6) * 0.35;
-  else if (proposer && proposer !== c.id) s += rel(c, proposer).like / 300;
-  return clamp(s, 0, 1);
+  return clamp(s + bias(c, proposer), 0, 1);
+}
+
+// 誰の提案か：信頼・好き嫌い・根回し（leanFor）・同じ会の仲間
+function bias(c, proposer) {
+  let b = 0;
+  if (proposer === 'player') b += (Wolf.trust(c, 'player') - 0.6) * 0.35;
+  else if (proposer && proposer !== c.id) b += rel(c, proposer).like / 300;
+  if (c.leanFor && S.t < c.leanFor.until && c.leanFor.id === proposer) b += 0.25;
+  if (proposer && (S.groups || []).some((g) => g.members.includes(c.id) && g.members.includes(proposer))) b += 0.12;
+  return b;
 }
 
 // 町をまとめたい気持ちの強さ（村長になりたがる人）
 export function ambition(c) { return c.p.sociability * 0.4 + c.p.greed * 0.3 + c.p.aggression * 0.2 + (c.formerJob === 'mayor' || c.job === 'mayor' ? 0.3 : 0) + (/牛耳/.test(c.persona || '') ? 0.3 : 0); }
 
 export function applyRule(rule) {
-  S.rules[rule.key] = rule.value;
+  const d = describe(rule);   // 変える前に説明を作る（廃止した法律の名前が消えないように）
+  if (rule.key === 'law') Laws.add(rule.value);
+  else if (rule.key === 'repeal') Laws.repeal(rule.value);
+  else S.rules[rule.key] = rule.value;
   sideEffects(rule);
-  const d = describe(rule);
+  for (const c of residents()) if (c.alive && c.psy) c.psy.mood.stress = Math.min(100, c.psy.mood.stress + 3);
   post('町役場', `【町の決まり】話し合いの結果、「${d}」が決まりました。`, { authorId: 'town' });
   log(`町の決まりが変わった：${d}`, 'event');
   Wolf.addNote(`町の決まり：${d}`);
@@ -312,6 +338,9 @@ export function hourly(h) {
         log(`${g.name}が${o.isPlayer ? 'よそ者' : o.name}の武器を没収した。`, 'event');
       }
       const [x, y] = tilePos(o);
+      // 組み立て式の法律（夜の外出・武器）
+      if (night && !facAt(x, y) && !o.hunt) Laws.enforce(o, 'night', [g], Sim.lawHooks);
+      if (o.items.includes('weapon')) Laws.enforce(o, 'weapon', [g], Sim.lawHooks);
       if (S.rules.curfew && night && !facAt(x, y) && !o.hunt && !(o.task?.type === 'watch')) {
         if (S.wanted.has(o.id)) continue;
         say(g, `${o.isPlayer ? 'よそ者' : o.name}、夜間外出禁止だぞ！`, 5);

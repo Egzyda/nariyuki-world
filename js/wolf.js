@@ -550,7 +550,7 @@ function addTrial(m, trial) {
 
 export function scheduleMeeting(orgId, delayMin, reason, rule = null, trial = null) {
   if (meetingActive()) {
-    if (rule && !S.meeting.agenda.some((a) => a.rule.key === rule.key)) {
+    if (rule && !S.meeting.agenda.some((a) => Town.describe(a.rule) === Town.describe(rule))) {
       S.meeting.agenda.push({ rule, proposer: orgId });
       addNote(`次の話し合いの議題に「${Town.describe(rule)}」が加わった`);
     }
@@ -861,7 +861,8 @@ function speakNext(m) {
       if (item.rule.key === 'mayorOffice' && item.rule.value) m.queue.unshift({ type: 'election', c: presentChars(m)[0] });
     } else text = `賛成${yes.length}・反対${no.length}（${Math.round(ratio * 100)}%）。${Town.ratioText(need)}に届かず、「${d}」は見送りになった。`;
     m.log.push({ who: '', text, cls: 'result' });
-    m.agenda = m.agenda.filter((a) => a.rule.key !== item.rule.key);
+    if (!/に決まった/.test(text)) log(`📜 ${text}`, 'event');
+    m.agenda = m.agenda.filter((a) => Town.describe(a.rule) !== Town.describe(item.rule));
     return text;
   }
   if (text) addLine(m, c, text);

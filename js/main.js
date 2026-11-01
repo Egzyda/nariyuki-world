@@ -8,6 +8,7 @@ import * as Brain from './brain.js';
 import * as Dlg from './dialog.js';
 import * as Mind from './mind.js';
 import * as Seer from './seer.js';
+import * as Psyche from './psyche.js';
 import * as Wolf from './wolf.js';
 import * as Town from './town.js';
 import { VERSION } from './version.js';
@@ -252,7 +253,7 @@ $('#update-btn').onclick = async () => {
   btn.disabled = true; $('#update-note').textContent = '最新版を読み込み中…';
   // ブラウザに残っている古いファイルを、サーバーの最新版で置き換えてから再読み込み
   const files = ['./', 'index.html', 'css/style.css', 'version.json', 'manifest.webmanifest',
-    ...['main', 'sim', 'world', 'render', 'sprites', 'state', 'data', 'brain', 'dialog', 'llm', 'llm-worker', 'wolf', 'town', 'version', 'save', 'icons', 'mind', 'seer'].map((f) => `js/${f}.js`)];
+    ...['main', 'sim', 'world', 'render', 'sprites', 'state', 'data', 'brain', 'dialog', 'llm', 'llm-worker', 'wolf', 'town', 'version', 'save', 'icons', 'mind', 'seer', 'psyche', 'laws'].map((f) => `js/${f}.js`)];
   await Promise.all(files.map((f) => fetch(f, { cache: 'reload' }).catch(() => {})));
   location.reload();
 };
@@ -1012,7 +1013,7 @@ function updateFollowBar() {
   const c = view.followId ? S.chars.find((x) => x.id === view.followId) : null;
   if (!c) { bar.hidden = true; return; }
   const plan = c.dayPlan?.find((x) => !x.done);
-  const html = `👁 <b>${esc(c.name)}</b>を観察中：${esc(Brain.actText(c))}（${esc(Brain.locName(c))}）${plan ? `<br><small>次の予定：${esc(Mind.planText(plan))}</small>` : ''}${c.intent?.thought ? `<br><small>心の声：「${esc(c.intent.thought)}」</small>` : ''}<button id="follow-stop">やめる</button><br><small>自分が動くと元に戻ります</small>`;
+  const html = `👁 <b>${esc(c.name)}</b>を観察中：${esc(Brain.actText(c))}（${esc(Brain.locName(c))}）${c.psy ? `<br><small>気分：${esc(Psyche.moodText(c))}${c.psy.lastThought ? `／さっき：${esc(c.psy.lastThought)}` : ''}</small>` : ''}${plan ? `<br><small>次の予定：${esc(Mind.planText(plan))}</small>` : ''}${c.intent?.thought ? `<br><small>心の声：「${esc(c.intent.thought)}」</small>` : ''}<button id="follow-stop">やめる</button><br><small>自分が動くと元に戻ります</small>`;
   if (bar._h !== html) { bar.innerHTML = html; bar._h = html; $('#follow-stop').onclick = stopFollow; }
   bar.hidden = false;
 }
@@ -1081,6 +1082,9 @@ function renderPeople() {
       好きなもの：${esc(c.likes || '')}${c.likesItem ? `（贈り物なら${ITEMS[c.likesItem].icon}${ITEMS[c.likesItem].name}）` : ''}<br>
       いる場所：${c.alive ? esc(Brain.locName(c)) : '―'}<br>
       ${c.intent?.thought ? `今日の心の声：「${esc(c.intent.thought)}」<br>` : ''}
+      ${c.psy ? `気分：${esc(Psyche.moodText(c))}／性格：${esc(Psyche.traitText(c))}<br>興味：${esc(Psyche.interestText(c))}／目標：${esc(Psyche.goalText(c))}<br>
+      本音：${rel(c, p).like >= 60 ? esc(Psyche.secretText(c)) + '（打ち明けてくれた）' : '？？？（もっと仲良くなると打ち明けてくれるかも）'}<br>
+      ${c.psy.lastThought ? `さっき：${esc(c.psy.lastThought)}<br>` : ''}${Psyche.groupOf(c) ? `会：「${esc(Psyche.groupOf(c).name)}」<br>` : ''}` : ''}
       ${c.dayPlan?.length ? `今日の予定：${c.dayPlan.map((x) => (x.done ? '✓' : '') + esc(Mind.planText(x))).join('／')}<br>` : ''}
       ${c.diary?.length ? `日記：${c.diary.map(esc).join(' / ')}<br>` : ''}
       ${bondsText(c)}

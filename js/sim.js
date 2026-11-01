@@ -15,6 +15,19 @@ import * as Town from './town.js';
 import * as Mind from './mind.js';
 import * as Seer from './seer.js';
 import { SETUP } from './state.js';
+import * as Psyche from './psyche.js';
+import * as Laws from './laws.js';
+
+// 法律の罰で使う（牢屋・ただ働き）
+export const lawHooks = {
+  jail: (t, min) => jail(t, min),
+  labor: (t) => {
+    if (t.isPlayer) { t.activity = 'labor'; t.busyStart = S.t; t.busyUntil = S.t + 180; return; }
+    setPlan(t, { place: 'farm', act: 'work' }); t.noPayUntil = S.t + 180;
+  },
+};
+export const watchers = (c) => witnesses(c, [c]);
+export const activityText = (c) => Brain.actText(c);
 
 const MOVE_TILES_PER_MIN = 0.75;
 const FOUNTAIN_Y = (D.FOUNTAIN[1] + 1) * TILE;
@@ -48,6 +61,7 @@ export function prepareLoaded() {
   buildWorld();
   S.settings ||= { law: 'normal', wolves: '1' };
   Town.normalize();
+  Psyche.ensure();
   for (const c of S.chars) { c.bubble = null; c.hurtUntil = 0; c.moving = false; }
   S.toasts = []; S.effects = []; S.callout = null; S.banner = null; S.holdId = null; S.meetingPause = false; S.paused = false;
   if (S.meeting) { S.meeting.ruleWait = null; if (['talking', 'voting'].includes(S.meeting.state)) S.meeting.playerIn = false; }
@@ -101,6 +115,8 @@ export function initGame(seed = Date.now()) {
   S.settings = { ...SETUP };
   Wolf.initWolf(S.settings);
   Town.initTown(S.settings);
+  S.laws = []; S.groups = []; S.events = []; S.psyDark = { day: 1, n: 0 };
+  Psyche.ensure();   // 住民の心（気分・性格・秘密・目標）
   // 人狼がいてもいなくても、町には昔から人狼の言い伝えがある
   for (const c of residents()) memo(c, 'この町には昔から、満月の夜に人狼が出るという言い伝えがある', 'info');
   post('町役場', '【町の言い伝え】この町には昔から「人の姿にまぎれる人狼」の言い伝えがあります。夜はしっかり戸締まりを。', { authorId: 'town' });
@@ -155,6 +171,7 @@ function hourly(h, d) {
     if (!place) continue;
     const co = workers.filter((o) => o !== c && JOBS[o.job]?.place === place).length;
     const bonus = 1 + 0.25 * Math.min(2, co);
+    if (c.noPayUntil > S.t) continue;   // 法律の罰でただ働き中
     const pay = JOBS[c.job].wage * bonus * (c.isPlayer ? 1 : D.NPC_WAGE_RATE);
     c.coins += pay;
     if (c.isPlayer) floatText(c, `+${pay.toFixed(1)}G`);
@@ -175,6 +192,7 @@ function hourly(h, d) {
   if (d === D.EVENTS.meteor.day && h === S.meteorHour && !S.meteor) meteorFall();
   if (h === 22) for (const c of S.chars) if (c.companion) endCompanion(c, true, true);
   if (h === 21) Mind.evening();   // 1日のふり返り（日記）
+  Psyche.hourly(h);   // 気分の移り変わり・宴会
   Wolf.hourly(h);
   Town.hourly(h);
   if (h >= 7 && h <= 21 && chance(0.5)) tryApproach();
@@ -227,6 +245,7 @@ function daily(d) {
   updateBonds();
   morningNews(d);
   Seer.morning();   // 占い師が何か感じていれば、掲示板に書く
+  Psyche.daily();   // 気になることが薄れる・目標の見直し・借金
   S.today = { crimes: 0, deaths: 0 };
   for (const c of S.chars) c.postsToday = 0;
   if (d >= D.EVENTS.drought.fromDay && S.droughtUntilDay < d && chance(D.EVENTS.drought.chance)) {
@@ -617,6 +636,7 @@ function decide(c) {
   const tod = S.t % 1440;
   if (c.task && runTask(c, tod)) return;
   if (c.appointment && keepAppointment(c)) return;
+  if (Psyche.patrols(c)) return;   // 夜回りの会
   if (Wolf.patrolling(c)) { setPlan(c, { place: 'plaza', tile: randomOutdoorTile(S.rand, 10, 24, 52, 34), act: 'patrol' }); return; }
   if (tod >= (S.wolfKnown || S.rules.curfew ? 21 : 21.5) * 60 || h < 6) { setPlan(c, { place: c.home, act: 'sleep' }); return; }
   // 人狼だと強く疑う相手に詰め寄る
@@ -659,6 +679,8 @@ function decide(c) {
   }
 
   if (c.hp < 50 && c.coins >= D.HEAL_COST && doctorAvailable() && c.job !== 'doctor' && h < 20) { setPlan(c, { place: 'clinic', act: 'heal' }); return; }
+  // 自分の気分・目標・悩みから、自分で考えて動く（行動の部品）
+  if (Psyche.act(c)) return;
   // AIが朝に立てた今日の予定
   if (Mind.runPlan(c)) return;
 
@@ -980,6 +1002,7 @@ function startActivity(c, plan) {
     case 'drink':
       if (c.coins >= D.DRINK_COST && facOpen('tavern')) {
         c.coins -= D.DRINK_COST; payJob('barkeep', 1);
+        Laws.enforce(c, 'drink', witnesses(c, [c]), lawHooks);
         for (const o of nearby(c, 4, (o) => o.activity === 'drink')) { addLike(c, o, 3); addLike(o, c, 3); shareRumor(c, o); }
         // 酒場の主人は客から噂を集める（町の情報の中心）
         const bk = nearby(c, 6, (o) => o.job === 'barkeep' && o.activity === 'work')[0];
@@ -1118,6 +1141,7 @@ export function interact(a, b, kind) {
       a.busyUntil = S.t + 10;
       break;
     case 'give': giveSomething(a, b); a.busyUntil = S.t + 15; break;
+    case 'psy': Psyche.meet(a, b); a.busyUntil = S.t + 20; if (!b.isPlayer && !b.companion) b.busyUntil = Math.max(b.busyUntil, S.t + 15); break;
     case 'beg': {
       const r = rel(b, a);
       const kind_ = b.p.sociability * (1 - b.p.greed);
@@ -1194,6 +1218,7 @@ export function giveToNpc(t, g) {
 }
 
 function giveSomething(a, b) {
+  Psyche.notice(b, 'gift', { about: a });
   if (!a.alive || !b.alive) return;
   if (a.food > 0) { a.food--; b.food++; say(a, 'ほら、これ食べな'); }
   else if (a.coins >= 2) { const n = a.coins >= 6 ? 2 : 1; a.coins -= n; b.coins += n; say(a, `${n}Gあげるよ`); }
@@ -1212,6 +1237,11 @@ function dispName(c) { return c.isPlayer ? 'よそ者' : c.name; }
 function crime(actor, victim, type, noticed) {
   S.stats.crimes++; S.today.crimes++;
   const ws = witnesses(actor, [actor, victim]);
+  // 心に残る（やられた人・見ていた人）
+  const an = actor.isPlayer ? 'よそ者' : actor.name;
+  if (noticed) Psyche.notice(victim, type === 'steal' ? 'theft_victim' : 'attacked', { about: actor, text: `${an}に${type === 'steal' ? '盗まれた' : type === 'attack' ? '殴られた' : '脅された'}` });
+  for (const w of ws) Psyche.notice(w, 'witness', { about: actor, text: `${an}が${victim.isPlayer ? 'よそ者' : victim.name}に${type === 'steal' ? '盗みを働く' : '手を出す'}のを見た` });
+  Laws.enforce(actor, type === 'steal' ? 'theft' : 'violence', ws.concat(noticed ? [victim] : []).filter((o) => !o.isPlayer), lawHooks);
   const [vText, wText] = WHAT[type];
   const actorN = dispName(actor);
   if (noticed) {
@@ -1360,6 +1390,7 @@ function doArrest(g, t) {
     memo(t, `${g.name}に捕まった`, 'crime');
     log(`衛兵の${g.name}が${dispName(t)}を捕まえた。`, 'event');
     if (t.isPlayer) toast('捕まった！ 8時間、牢屋に入れられる…');
+    Psyche.notice(t, 'arrested', { about: g, text: `${g.isPlayer ? 'よそ者' : g.name}に捕まった` });
     if (g.isPlayer) {
       toast(`🛡️ ${t.name}を逮捕した！ 8時間、牢屋に入る。`);
       // 被害を受けた人・見ていた人は感謝する
@@ -1396,6 +1427,7 @@ export function die(c, cause, opts = {}) {
   if (!c.alive) return;
   c.alive = false; c.hp = 0; c.path = []; c.plan = null; c.companion = null;
   c.diedDay = day(); c.deathCause = cause;   // 住民リストに「〇日目・〜で死亡」と出す
+  for (const o of residents()) if (o !== c && o.alive) Psyche.notice(o, 'death', { about: c, text: `${c.isPlayer ? 'よそ者' : c.name}が亡くなった` });
   S.stats.deaths++; S.today.deaths++;
   S.wanted.delete(c.id);
   const [tx, ty] = tilePos(c);
@@ -1500,7 +1532,9 @@ export function titleFor(inf) {
 export function playerBusy() { const p = S.player; return !p.alive || isJailed(p) || S.t < p.busyUntil; }
 
 const weaponCost = () => (S.player.job === 'smith' ? Math.ceil(D.WEAPON_COST / 2) : D.WEAPON_COST);
-const foodPrice = () => (S.player.job === 'merchant' ? Math.max(1, D.FOOD_PRICE - 1) : D.FOOD_PRICE);
+// 値上げ中の店（住民が自分で値段をつり上げることがある）
+const priceUp = (job) => { const u = (S.priceUp || {})[job]; return u && u.until >= day() ? 2 : 0; };
+const foodPrice = () => (S.player.job === 'merchant' ? Math.max(1, D.FOOD_PRICE - 1) : D.FOOD_PRICE) + priceUp('merchant');
 
 // 衛兵のよそ者が t を逮捕できる理由（手配中・町で知られている悪事）。なければ null
 export function arrestGround(t) {
@@ -1640,7 +1674,7 @@ export function doFacility(fid, act) {
   switch (act) {
     case 'eat':
       if (S.foodStock < 1) return toast('食堂の食料が尽きている！');
-      if (p.job !== 'cook' && !playerSpend(D.MEAL_COST)) return;
+      if (p.job !== 'cook' && !playerSpend(D.MEAL_COST + priceUp('cook'))) return;
       S.foodStock -= 1; payCooks(1); seatPlayer(sp.seat);
       toast('ご飯を注文した……');
       busy(30, 'eat', () => {
@@ -1700,8 +1734,9 @@ export function doFacility(fid, act) {
       break;
     }
     case 'drink': {
-      if (p.job !== 'barkeep' && !playerSpend(D.DRINK_COST)) return;
+      if (p.job !== 'barkeep' && !playerSpend(D.DRINK_COST + priceUp('barkeep'))) return;
       if (p.job !== 'barkeep') payJob('barkeep', 1);
+      Laws.enforce(p, 'drink', witnesses(p, [p]), lawHooks);
       seatPlayer(sp.seat);
       for (const o of S.chars) if (o.companion?.arrived && o.companion.dest === 'tavern') { addLike(o, p, 4); say(o, '乾杯！'); }
       busy(30, 'drink', () => {
@@ -2074,6 +2109,7 @@ export function playerPost(text) {
   const posWords = ['いい人', '優しい', '助けて', 'ありがとう', '信用', '頼り'];
   const neg = negWords.some((w) => text.includes(w));
   const pos = posWords.some((w) => text.includes(w));
+  if (neg && names.length) Laws.enforce(p, 'gossip', residents().filter((o) => o.alive), lawHooks);   // 悪口を禁じる法律
   for (const o of residents()) {
     if (!o.alive || names.includes(o)) continue;
     const cred = clamp((rel(o, p).like + 50) / 100, 0.15, 1.2);

@@ -8,6 +8,7 @@ import { facAt } from './world.js';
 import * as Dlg from './dialog.js';
 import * as Wolf from './wolf.js';
 import * as Town from './town.js';
+import * as Psyche from './psyche.js';
 
 const STANCES = ['peaceful', 'work', 'scheme', 'aggressive'];
 const rnd = Math.random;
@@ -103,6 +104,7 @@ function selfDesc(c) {
     `好きなもの: ${c.likes || '特になし'}。ほかの住民への気持ち: ${relSummary(c)}\n` +
     `最近の記憶: ${c.memory.slice(-4).join(' / ') || '特になし'}\n` +
     (c.intent?.thought ? `今日の心の声: ${c.intent.thought}\n` : '') +
+    (c.psy ? Psyche.describeFor(c) + '\n' : '') +
     (c.dayPlan?.length ? `今日の予定: ${c.dayPlan.map((x) => `${x.hour}時${x.done ? '(済)' : ''} ${x.do}${x.why ? '・' + x.why : ''}`).join('、')}\n` : '') +
     (c.diary?.length ? `これまでの日記: ${c.diary.slice(-2).join(' / ')}\n` : '') +
     `町の様子: ${situation()}` + wolfDesc(c);
