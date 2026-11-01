@@ -101,6 +101,8 @@ export function parseIntent(text, residents, self) {
     const hr = parseInt(tm[1].replace(/[０-９]/g, (d) => '０１２３４５６７８９'.indexOf(d)));
     return { ...r, kind: 'appoint', hour: hr };
   }
+  // 時間を決めずに「広場で待ってて」「ここで待ってて」
+  if (!tm && /(待って(て|いて|てね|てくれ|てください|てほしい|ってよ)|待っといて|待っててね|待機して)/.test(t)) return { ...r, kind: 'waitThere' };
   if ((r.target || r.self) && /(髪|かみ|毛の色)/.test(t)) return { ...r, target: r.target || self, kind: 'hairAsk' };
   if (!r.target && /(あなた|あんた|君|きみ|お前).*(髪|かみ)/.test(t)) return { ...r, target: self, kind: 'hairAsk' };
   if (r.target && /(釈放|出してあげて|出してやって|解放して|許してあげて|出してくれ)/.test(t)) return { ...r, kind: 'releaseReq' };

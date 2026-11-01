@@ -5,6 +5,7 @@ import { walkable, facAt, roofedFacAt } from './world.js';
 import { S, day, timeStr, rel, residents, distTiles, isJailed, clamp, toast, log, say } from './state.js';
 import * as Sim from './sim.js';
 import * as Brain from './brain.js';
+import * as Dlg from './dialog.js';
 import * as Wolf from './wolf.js';
 import * as Town from './town.js';
 import { VERSION } from './version.js';
@@ -332,6 +333,8 @@ cv.addEventListener('pointercancel', pointerEnd);
 $('#act').addEventListener('click', (e) => { e.preventDefault(); interactKey(); });
 $('#act2').addEventListener('click', (e) => { e.preventDefault(); interactPlace(); });
 $('#callout').addEventListener('click', () => interactKey());
+// スマホ：近くの住民カードはタップで詳しく
+$('#nearcard').addEventListener('click', () => document.body.classList.toggle('nc-open'));
 document.addEventListener('gesturestart', (e) => e.preventDefault());   // iPhoneのページ拡大を止める
 $('#map-btn').onclick = () => { view.showMinimap = !view.showMinimap; };
 
@@ -833,6 +836,7 @@ function renderStatus() {
     <div class="grid2">
       <div>所持金：<b>${Math.floor(p.coins)}G</b></div><div>食料：<b>${p.food}</b></div>
       <div>腕力：<b>${(p.str + (p.items.includes('weapon') ? 8 : 0)).toFixed(1)}</b></div><div>職業：<b>${JOBS[p.job].name}</b></div>
+      ${p.stealth ? `<div>盗みの腕：<b>${p.stealth.toFixed(1)}</b></div>` : ''}
     </div>
     ${S.wanted.has('player') ? '<div class="wanted">🚨 衛兵に手配されている！</div>' : ''}
     <div class="box"><h4>町での立場：${Sim.titleFor(inf)}</h4>
@@ -929,14 +933,17 @@ function updateNearCard(n) {
   const r = rel(c, p);
   const likeCol = r.like >= 0 ? '#6ac060' : '#d05050';
   const feel = r.like >= 50 ? '大好き' : r.like >= 20 ? '好意的' : r.like > -15 ? 'ふつう' : r.like > -45 ? '警戒' : '嫌い';
-  const html = `<b>${esc(c.name)}</b> <small>${JOBS[c.job].icon}${JOBS[c.job].name}</small>
+  const html = `<b>${esc(c.name)}</b> <small>${JOBS[c.job].icon}${JOBS[c.job].name}</small><span class="nc-tog"></span>
     <div class="row"><span>好感</span>${meter(Math.abs(r.like), 100, likeCol)}<span>${Math.round(r.like)}（${feel}）</span></div>
-    <div class="row"><span>恐怖</span>${meter(r.fear, 100, '#a070d0')}<span>${Math.round(r.fear)}</span></div>
     <div>いま：${isJailed(c) ? `🔒 牢屋の中（${Sim.jailText(c)}）` : esc(Brain.actText(c))}</div>
+    <div class="nc-more">
+    <div class="row"><span>恐怖</span>${meter(r.fear, 100, '#a070d0')}<span>${Math.round(r.fear)}</span></div>
     <div>髪の色：${JOBS[c.job].hat && JOBS[c.job].hat !== 'glasses' ? '帽子でよく見えない（人に聞けばわかるかも）' : Wolf.hairName(c)}</div>
     ${c.likesItem ? `<div>好物：${ITEMS[c.likesItem].icon}${ITEMS[c.likesItem].name}</div>` : ''}
     ${c.quest ? `<div>📝 頼まれごと：${esc(c.quest.label)}を届ける</div>` : ''}
-    ${c.companion ? '<div>🤝 あなたと同行中</div>' : ''}`;
+    ${c.companion ? '<div>🤝 あなたと同行中</div>' : ''}
+    ${c.appointment ? `<div>⏳ ${c.appointment.loose ? '' : Math.floor((c.appointment.at % 1440) / 60) + '時に'}${Dlg.placeName(c.appointment.place)}であなたを待つ約束</div>` : ''}
+    </div>`;
   if (el._h !== html) { el.innerHTML = html; el._h = html; }
   el.hidden = false;
 }
@@ -951,7 +958,7 @@ function updateCallout() {
   }
   if (S.callout && !chatTarget) {
     const c = S.chars.find((x) => x.id === S.callout.id);
-    const html = `<b>${esc(c?.name || '')}</b>「${esc(S.callout.text)}」<span class="k">F：返事をする</span>`;
+    const html = `<b>${esc(c?.name || '')}</b>「${esc(S.callout.text)}」<span class="k">${isTouch() ? 'タップで返事する' : 'F：返事をする'}</span>`;
     if (el._h !== html) { el.innerHTML = html; el._h = html; }
     el.hidden = false;
   } else el.hidden = true;
@@ -1030,7 +1037,7 @@ function renderLog() {
 
 function updateToasts() {
   const now = performance.now();
-  S.toasts = S.toasts.filter((t) => t.until > now).slice(-4);
+  S.toasts = S.toasts.filter((t) => t.until > now).slice(isMobile() ? -3 : -4);
   const el = $('#toasts');
   const html = S.toasts.map((t) => `<div class="toast">${esc(t.text)}</div>`).join('');
   if (el._h !== html) { el.innerHTML = html; el._h = html; }

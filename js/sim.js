@@ -155,7 +155,7 @@ function hourly(h, d) {
     if (!h0 || !h0.alive || h0.activity !== 'research') m.state = 'held';
     else {
       const researcherHere = S.chars.some((c) => c.alive && c.job === 'researcher' && (c === h0 || (c.activity === 'work' && S.t < c.busyUntil)));
-      m.progress += researcherHere ? 34 : 12;
+      m.progress += researcherHere ? 60 : 50;   // 2時間あれば必ずわかる（研究者がいると少し早い）
       if (m.progress >= 100) finishResearch(h0);
     }
   }
@@ -782,12 +782,22 @@ function finishWatch(c, t) {
   else finishTask(c, Brain.taskLine(c, 'watchNone', t));
 }
 
+// いま立っている場所（建物の中・畑・広場）
+function hereId(c) {
+  const [x, y] = tilePos(c);
+  const f = facAt(x, y);
+  if (f && inDest(x, y, f.id)) return f.id;
+  if (inDest(x, y, 'plaza')) return 'plaza';
+  return null;
+}
+
 // 待ち合わせ
+const apptGrace = (a) => (a.loose ? 120 : 70);   // 時間を決めない「待ってて」は少し長めに待つ
 function keepAppointment(c) {
   const a = c.appointment;
-  if (S.t > a.at + 70) {
+  if (S.t > a.at + apptGrace(a)) {
     c.appointment = null;
-    addLike(c, S.player, -8);
+    addLike(c, S.player, a.loose ? -3 : -8);
     memo(c, `よそ者に${placeName(a.place)}での待ち合わせをすっぽかされた`, 'info');
     pushDone(c, Brain.taskLine(c, 'stoodUp', null, placeName(a.place)));
     return false;
@@ -899,7 +909,7 @@ function startActivity(c, plan) {
     case 'patrol': c.busyUntil = S.t + 15 + S.rand() * 15; break;
     case 'report': doReport(c); c.busyUntil = S.t + 15; break;
     case 'watch': c.busyUntil = S.t + 30; break;
-    case 'wait': c.busyUntil = (c.appointment?.at || S.t) + 70; say(c, 'まだかな……'); break;
+    case 'wait': c.busyUntil = (c.appointment?.at || S.t) + (c.appointment ? apptGrace(c.appointment) : 70); say(c, 'まだかな……'); break;
     case 'board': {
       c.busyUntil = S.t + 20; c.dir = 'up';
       const latest = S.board.find((p) => p.authorId === 'player' && !p.replies.some((r) => r.author === c.name) && S.t - p.postedT < 600);
@@ -1117,9 +1127,19 @@ function crime(actor, victim, type, noticed) {
   return ws;
 }
 
+// 盗みの腕（よそ者だけ）：盗むたびに少しずつ上がる。0〜10
+export const stealth = (c) => (c.isPlayer ? c.stealth || 0 : 0);
+function gainStealth(c, ok) {
+  if (!c.isPlayer) return;
+  const before = Math.floor(stealth(c));
+  c.stealth = Math.min(10, stealth(c) + (ok ? 0.4 : 0.2) * (1 - stealth(c) / 12));
+  if (Math.floor(c.stealth) > before) { toast(`🤫 盗みの腕が上がった（${Math.floor(c.stealth)}）`); floatText(c, '盗みの腕UP', '#c0a0ff'); }
+}
+
 function doSteal(a, b) {
   const sleeping = b.activity === 'sleep';
-  const success = chance(sleeping ? 0.85 : 0.55 + (a.isPlayer ? 0.1 : 0));
+  const sk = stealth(a);
+  const success = chance(Math.min(0.97, (sleeping ? 0.85 : 0.55 + (a.isPlayer ? 0.1 : 0)) + sk * 0.03));
   let got = '';
   if (success) {
     if (b.items.includes('meteor') && chance(0.6)) { removeItem(b, 'meteor'); a.items.push('meteor'); S.meteor.holder = a.id; S.meteor.state = 'held'; got = '光る石'; if (b.isPlayer) a.loot = { item: 'meteor' }; }
@@ -1127,7 +1147,8 @@ function doSteal(a, b) {
     else if (b.food > 0) { b.food--; a.food++; got = '食料'; }
   }
   S.stats.thefts++;
-  const noticed = !success || chance(0.4);
+  const noticed = !success || chance(Math.max(0.08, (sleeping ? 0.15 : 0.4) - sk * 0.03));
+  gainStealth(a, success);
   if (a.isPlayer) toast(success ? (got ? `${dispName(b)}から${got}を盗んだ。` : '何も持っていなかった。') : `失敗！ ${b.name}に気づかれた！`);
   if (b.isPlayer && noticed) toast(`${a.name}に${success ? got + 'を盗まれた！' : '財布を狙われた！'}`);
   if (!success && !b.isPlayer) say(b, pick(['泥棒！', 'おい、何してる！']));
@@ -1560,28 +1581,35 @@ export function doFacility(fid, act) {
     case 'surrender': S.wanted.delete('player'); jail(p, 4 * 60); toast('自首した。4時間の牢屋…'); for (const o of residents()) if (o.job === 'guard') addLike(o, p, 10); log('よそ者が自首した。', 'event'); break;
     case 'research':
       if (!facOpen('lab')) return;
-      S.meteor.state = 'researching'; S.meteor.holder = 'player'; busy(120, 'research');
-      toast('光る石を調べ始めた…'); break;
+      S.meteor.state = 'researching'; S.meteor.holder = 'player';
+      busy(120, 'research', () => { if (S.meteor?.state === 'researching' && S.meteor.holder === 'player') finishResearch(p); });
+      toast('光る石を調べ始めた…（2時間）'); break;
     case 'work': { seatPlayer(sp.work); const c0 = p.coins; busy(60, 'work', () => toast(`ひと仕事終えた。稼ぎ +${(p.coins - c0).toFixed(1)}G`)); toast(`${JOBS[p.job].name}として働く…`); break; }
     case 'burgle': {
       const owners = residents().filter((o) => o.alive && o.home === fid);
       const home = owners.filter((o) => facAt(...tilePos(o)) === f);
       const away = owners.filter((o) => !home.includes(o));
       busy(20);
-      if (home.length) {
-        const o = home[0];
+      // 起きている住民にはまず見つかる。寝ていれば、盗みの腕しだいでこっそりやれる
+      const sk = stealth(p);
+      const spotter = home.find((o) => chance(o.activity === 'sleep' ? Math.max(0.05, 0.4 - sk * 0.035) : Math.max(0.5, 0.95 - sk * 0.04)));
+      if (spotter) {
+        const o = spotter;
+        if (o.activity === 'sleep') { o.activity = null; o.busyUntil = S.t; if (o.inBed) getOutOfBed(o); }
         say(o, 'ちょっと！ 人の家で何してるの！');
         addLike(o, p, -15); memo(o, 'よそ者が家に勝手に入ってきた', 'crime');
+        gainStealth(p, false);
         return toast(`${o.name}に見つかった！`);
       }
-      const victim = away.length ? pick(away) : null;
+      const victim = owners.length ? pick(owners) : null;
       if (!victim) return toast('めぼしい物はなかった。');
+      gainStealth(p, true);
       const n = Math.min(Math.floor(victim.coins), 2 + Math.floor(S.rand() * 4));
       victim.coins -= n; p.coins += n; S.stats.thefts++;
       S.stats.crimes++; S.today.crimes++;
-      const ws = witnesses(p, [p]);
+      const ws = witnesses(p, [p, ...home]);   // 家の人はさっき気づかなかった
       if (ws.length) { for (const w of ws) { addLike(w, p, -15); memo(w, `よそ者が${f.name}に忍び込んだのを見た`, 'crime'); } S.wanted.add('player'); log(`よそ者が${f.name}に空き巣に入った。`, 'crime'); toast(`${victim.name}の家から${n}G盗んだ…が、見られていた！`); }
-      else { memo(victim, '家のお金が減っていた。誰かが忍び込んだ', 'crime'); toast(`${victim.name}の家から${n}G盗んだ。誰にも見られていない。`); }
+      else { memo(victim, '家のお金が減っていた。誰かが忍び込んだ', 'crime'); toast(`${victim.name}の家から${n}G盗んだ。${home.length ? '寝ている間に、こっそりと。' : '誰にも見られていない。'}`); }
       break;
     }
     case 'bomb': bombFacility(p, fid); break;
@@ -1596,7 +1624,8 @@ function shopTheft(fid, what) {
   const f = FAC[fid];
   const ws = witnesses(p, [p]);
   p.activity = 'busy'; p.busyStart = S.t; p.busyUntil = S.t + 10;
-  const caught = ws.length && chance(0.3 + ws.length * 0.15 + (ws.some((w) => w.job === 'guard') ? 0.4 : 0));
+  const caught = ws.length && chance(0.3 + ws.length * 0.15 + (ws.some((w) => w.job === 'guard') ? 0.4 : 0) - stealth(p) * 0.04);
+  gainStealth(p, !caught);
   let got = '';
   if (what === 'goods') { const k = pick(['food', 'flower', 'sweets', 'book']); if (k === 'food') p.food++; else p.items.push(k); got = k === 'food' ? '食料' : ITEMS[k].name; }
   else if (what === 'sake') { p.items.push('sake'); got = '酒瓶'; }
@@ -1790,7 +1819,19 @@ export function applyTalkResult(t, r) {
     out.msgs.push(`📣 ${Math.floor((m.at % 1440) / 60)}時からの話し合いで「${Town.describe(r.rule)}」が話し合われる`);
   }
   if (r.task) { const m = assignTask(t, r.task); out.msgs.push(`🤝 ${m}`); out.close = r.task.type !== 'watch' ? true : out.close; }
-  if (r.appointment) {
+  if (r.appointment?.loose) {
+    // 「〇〇で待ってて」：すぐその場所へ行って待つ
+    const place = r.appointment.place === 'here' ? hereId(t) : r.appointment.place;
+    if (!place) out.msgs.push('（町の通りでは待ち合わせしにくい。「広場で待ってて」のように場所を言おう）');
+    else {
+      if (t.companion) endCompanion(t, false, true);
+      t.appointment = { place, at: S.t + 40, loose: true, missed: false };
+      t.plan = null; t.path = []; t.busyUntil = S.t; t.activity = null;
+      const m = `${t.name}が${placeName(place)}で待っている（2時間ほど）`;
+      Wolf.addNote(m); out.msgs.push(`⏳ ${m}`);
+      out.close = true;
+    }
+  } else if (r.appointment) {
     t.appointment = { ...r.appointment, missed: false };
     const hh = Math.floor((r.appointment.at % 1440) / 60);
     const m = `${hh}時に${placeName(r.appointment.place)}で${t.name}と待ち合わせ`;

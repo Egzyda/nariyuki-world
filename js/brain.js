@@ -517,6 +517,17 @@ function respond(c, it, raw) {
       res.like = gainLike(c, 2);
       break;
     }
+    case 'waitThere': {
+      // 時間を決めない待ち合わせ：その場所で2時間ほど待つ（来てくれたら一緒に過ごす）
+      if (hour() >= 21 || hour() < 6) { res.say = ln('sleepy'); break; }
+      if (like < -10 && (c.favor || 0) < 1) { res.say = Dlg.lineN(c, ['なんで{I}があんたを待たなきゃいけないの。', 'すみません、お待ちするのはちょっと……。']); break; }
+      const place = it.place || 'here';
+      const pn = place === 'here' ? 'ここ' : Dlg.placeName(place);
+      res.appointment = { place, at: S.t + 40, loose: true };
+      res.say = Dlg.lineN(c, [`わかった、${pn}で待ってるね。あんまり遅くならないでよ。`, `わかりました。${pn}でお待ちしていますね。`]);
+      res.like = gainLike(c, 1);
+      break;
+    }
     case 'hairAsk': {
       const t = it.target;
       let color = Wolf.hairName(t);

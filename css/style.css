@@ -378,3 +378,20 @@ body.mobile #toasts { top: 64px; }
 #act2 span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #act2[hidden] { display: none !important; }
 body.touch #hint { max-width: 50%; }
+
+/* ---- スマホ：表示の置き場所を整理 ----
+   上：時刻・状態 → その下に呼びかけ／お知らせ。下：近くの住民（小さく）・ヒント・操作ボタン。真ん中（自分のまわり）はあけておく */
+.nc-tog { display: none; }
+body.mobile #nearcard { bottom: 158px; width: min(210px, 52%); padding: 5px 8px; font-size: 11px; line-height: 1.45; }
+body.mobile #nearcard .nc-more { display: none; }
+body.mobile.nc-open #nearcard .nc-more { display: block; }
+body.mobile.nc-open #nearcard { width: min(250px, 66%); }
+body.touch #nearcard { pointer-events: auto; cursor: pointer; }
+body.mobile #nearcard .nc-tog { display: inline; float: right; color: #9a9; font-size: 10px; }
+body.mobile #nearcard .nc-tog::after { content: '▼ くわしく'; }
+body.mobile.nc-open #nearcard .nc-tog::after { content: '▲ とじる'; }
+body.mobile #callout { top: 58px; bottom: auto !important; left: 6px; right: 6px; transform: none; max-width: none; padding: 6px 10px; font-size: 13px; animation: none; }
+body.mobile #callout .k { display: inline; margin-left: 6px; color: #b06a10; font-weight: bold; }
+body.mobile.callout-on #toasts { top: 118px; }
+body.mobile #busy { top: auto; bottom: 124px; font-size: 13px; }
+body.mobile #banner { top: 58px; }
