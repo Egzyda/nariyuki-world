@@ -113,7 +113,8 @@ export function update(dtReal) {
   const p = S.player;
   const fast = p.alive && ((p.activity === 'sleep' && p.busyUntil > S.t) || isJailed(p));
   // 働く・鍛えるなどの間は時間を早送り（待たされる感じを減らす）
-  const doing = p.alive && !fast && p.busyUntil > S.t && ['work', 'train', 'research'].includes(p.activity);
+  // 働く・食べる・治療など、ゲージが出る行動のあいだは全部早送り
+  const doing = p.alive && !fast && p.busyUntil > S.t && !!p.activity && !['sleep', 'jail', 'wait'].includes(p.activity);
   const gdt = Math.min(dtReal, 0.1) * D.GAME_MIN_PER_SEC * S.speed * (fast ? 25 : doing ? 2.5 : 1);
   const before = S.t;
   S.t += gdt;
@@ -858,9 +859,31 @@ function doctorAvailable() {
 }
 
 // ================= 施設での行動 =================
+// 住民の暮らしの記録（記録タブの「暮らし」）。同じ人の同じ行動は、1日に何度も書かない
+const LIFE_TEXT = {
+  work: (c) => `${c.name}が${placeName(JOBS[c.job]?.place) || '職場'}で働き始めた`,
+  eat: (c) => `${c.name}が食堂でご飯を食べている`,
+  drink: (c) => `${c.name}が酒場で一杯やっている`,
+  heal: (c) => `${c.name}が診療所で手当てを受けている`,
+  buyfood: (c) => `${c.name}が市場で買い物をしている`,
+  visit: (c, plan) => `${c.name}が${placeName(plan.place)}に立ち寄った`,
+  train: (c) => `${c.name}が訓練場で体を鍛えている`,
+  board: (c) => `${c.name}が掲示板を読んでいる`,
+};
+function lifeLog(c, plan) {
+  if (c.isPlayer || !c.alive) return;
+  const fn = LIFE_TEXT[plan.act];
+  if (!fn) return;
+  const key = plan.act + ':' + day() + (plan.act === 'work' ? '' : ':' + hour());
+  if ((c.lifeLogged ||= {})[plan.act] === key) return;
+  c.lifeLogged[plan.act] = key;
+  log(fn(c, plan), 'life');
+}
+
 function startActivity(c, plan) {
   const act = plan.act;
   c.activity = act;
+  lifeLog(c, plan);
   if (c.guiding) {
     say(c, Brain.arriveLine(c, c.guiding.place));
     c.guiding = null;
@@ -963,6 +986,8 @@ export function interact(a, b, kind) {
       const rumor = pickRumor(a, b);
       const [la, lb] = Wolf.chatLines(a, b) || Brain.npcDialogue(a, b, rumor);
       say(a, la);
+      const pk = [a.id, b.id].sort().join(':');
+      if (!b.isPlayer && !a.isPlayer && S.t - ((S.chatLogT ||= {})[pk] || -999) > 90) { S.chatLogT[pk] = S.t; log(`${a.name}「${la}」→ ${b.name}「${lb}」`, 'talk'); }
       faceTo(b, a);
       setTimeout(() => b.alive && say(b, lb), 1400);
       addLike(a, b, 2 + a.p.sociability * 3); addLike(b, a, 2 + b.p.sociability * 2);

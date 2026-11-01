@@ -445,8 +445,12 @@ export function draw(ctx, w, h, dt) {
     ctx.globalAlpha = a;
     sign(ctx, `${f.icon} ${f.name}`, cx, cy, f);
     if (f.kind !== 'field' && (roofAlpha[f.id] ?? 1) > 0.5) {
-      const n = S.chars.filter((c) => c.alive && !c.isPlayer && roofedFacAt(...charTile(c)) === f).length;
-      if (n) label(ctx, `👤${n}`, cx, cy + 16, 9, '#ffe9a0');
+      // 屋根の上に、中にいる人の名前を出す（外からでも誰がいるかわかる）
+      const inside = S.chars.filter((c) => c.alive && !c.isPlayer && roofedFacAt(...charTile(c)) === f);
+      if (inside.length) {
+        const names = inside.slice(0, 3).map((c) => c.name).join('・') + (inside.length > 3 ? ` 他${inside.length - 3}人` : '');
+        label(ctx, `👤${names}`, cx, cy + 16, 9, '#ffe9a0');
+      }
     }
     const closed = S.fac[f.id] && S.fac[f.id].closedUntilDay >= day();
     if (closed) label(ctx, '🔥 使用不可', cx, cy + 28, 10, '#ff9a7a');

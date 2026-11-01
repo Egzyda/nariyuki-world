@@ -415,3 +415,16 @@ body.mobile #todo { right: 6px; width: min(230px, 58%); font-size: 11px; max-hei
 #toasts { z-index: 3; }
 #todo.pulse .todo-open { animation: pulse 1.6s 3; }
 #result-box .ghost { background: #2c3824; font-size: 13px; margin-top: 6px; }
+
+/* 一時停止の表示 */
+#pausemark { position: absolute; left: 50%; top: 24%; transform: translate(-50%, -50%); background: rgba(10,12,8,.78); border: 2px solid #ffe9a0;
+  border-radius: 14px; padding: 12px 24px; text-align: center; cursor: pointer; z-index: 4; }
+#pausemark b { display: block; font-size: 20px; color: #ffe9a0; letter-spacing: 2px; }
+#pausemark small { color: #bbb; font-size: 12px; }
+/* 記録の絞り込み */
+.log-tabs { display: flex; gap: 4px; margin-bottom: 6px; position: sticky; top: -6px; background: #20281a; padding: 4px 0; z-index: 1; }
+.log-tabs button { font-size: 11px; padding: 3px 8px; background: #2c3824; color: #ccc; border-radius: 10px; }
+.log-tabs button.on { background: #c8902a; color: #fff; }
+.logline.life { color: #cfe0bf; }
+.logline.talk { color: #e8dcc0; }
+.logline.mind { color: #c8b8f0; }

@@ -157,6 +157,7 @@ function backToTitle() {
 let lastAutoDay = 0;
 $('#save-btn').onclick = () => toast(Save.save('manual') ? `💾 セーブした（${day()}日目 ${timeStr()}）` : 'セーブに失敗した……');
 $('#title-btn').onclick = backToTitle;
+$('#pausemark').onclick = () => setSpeed(1);
 // 好きなときに終わって、町の評価を見る（そのまま続けることもできる）
 $('#end-btn').onclick = () => {
   if (!confirm('ここでいったん区切って、町の評価を見ますか？（あとで続けることもできます）')) return;
@@ -751,7 +752,7 @@ function updateUI() {
   if (!p) return;
   // 時計は10分きざみで表示（1分ずつ動くと、せわしなく感じるため）
   const tm = Math.floor((S.t % 1440) / 10) * 10;
-  $('#hud').innerHTML = `<b>${day()}日目</b> ${String(Math.floor(tm / 60)).padStart(2, '0')}:${String(tm % 60).padStart(2, '0')}　${icon('pin', 'hud-ic')}${whereText()}${aiLoad != null ? `　🧠AI切替中 ${aiLoad}%` : ''}${S.paused && !chatTarget ? '　⏸ 一時停止中' : ''}${S.droughtUntilDay >= day() ? '　☀️日照り' : ''}${aiBadge()}`;
+  $('#hud').innerHTML = `<b>${day()}日目</b> ${String(Math.floor(tm / 60)).padStart(2, '0')}:${String(tm % 60).padStart(2, '0')}　${icon('pin', 'hud-ic')}${whereText()}${aiLoad != null ? `　🧠AI切替中 ${aiLoad}%` : ''}${S.droughtUntilDay >= day() ? '　☀️日照り' : ''}${aiBadge()}`;
 
   const n = nearestThing();
   const place = n?.type === 'char' ? placeThing() : null;   // 人の近くでも使える建物など
@@ -784,6 +785,10 @@ function updateUI() {
     }
     if (joy.id == null) joyHome();
   }
+  // 一時停止中は画面の真ん中に大きく出す（タップで再開）
+  const pm = $('#pausemark');
+  const showPause = S.paused && !chatTarget && $('#meeting').hidden && !S.over && $('#picker').hidden;
+  if (pm.hidden === showPause) pm.hidden = !showPause;
   const bd = document.body.classList;
   bd.toggle('menu-open', !!menuFor);
   bd.toggle('meeting-open', !$('#meeting').hidden);
@@ -950,7 +955,7 @@ function renderPeople() {
   const p = S.player;
   // 並び順は変えない（亡くなった人も元の場所に、黒く残す）
   const list = residents().slice().sort((a, b) => (b.key - a.key));
-  $('#tab-people').innerHTML = list.map((c) => {
+  const html = list.map((c) => {
     const r = rel(c, p);
     const deadNow = !c.alive && !c.undiscovered;
     const st = c.undiscovered ? '' : !c.alive ? `🪦 ${c.diedDay ? c.diedDay + '日目・' : ''}${c.killedBy || c.deathCause === '人狼' ? '人狼に襲われた' : c.deathCause ? esc(String(c.deathCause)) + 'で死亡' : '死亡'}` : isJailed(c) ? `🔒${Sim.jailText(c)}` : S.wanted.has(c.id) ? '🚨' : c.companion ? '🤝' : c.activity === 'sleep' ? '💤' : '';
@@ -971,6 +976,10 @@ function renderPeople() {
       　恐怖<div class="meter"><i style="width:${r.fear}%;background:#a070d0"></i></div>${Math.round(r.fear)}</div>
       ${detail}</div>`;
   }).join('');
+  // 中身が変わったときだけ書き直す（毎回書き直すとチカチカする）
+  const el = $('#tab-people');
+  if (el._h === html) return;
+  el._h = html; el.innerHTML = html;
   $('#tab-people').querySelectorAll('.person').forEach((el) => el.onclick = () => { expanded = expanded === el.dataset.id ? null : el.dataset.id; renderPeople(); });
 }
 
@@ -1098,11 +1107,19 @@ function renderNotes() {
 }
 
 let logSig = '';
+// 記録の絞り込み：全部／事件／暮らし／会話・心の声
+const LOG_FILTERS = { all: null, case: ['crime', 'event', 'death'], life: ['life', 'info'], talk: ['talk', 'mind'] };
+let logFilter = 'all';
 function renderLog() {
-  const sig = S.log.length + ':' + (S.log[0]?.text || '');
+  const sig = S.log.length + ':' + (S.log[0]?.text || '') + ':' + logFilter;
   if (sig === logSig) return;
   logSig = sig;
-  $('#tab-log').innerHTML = S.log.slice(0, 120).map((l) => `<div class="logline ${l.kind}"><span class="tm">${l.day}日目 ${l.time}</span>${esc(l.text)}</div>`).join('');
+  const kinds = LOG_FILTERS[logFilter];
+  const tabs = Object.entries({ all: '全部', case: '事件', life: '暮らし', talk: '会話・心の声' })
+    .map(([k, v]) => `<button data-lf="${k}" class="${k === logFilter ? 'on' : ''}">${v}</button>`).join('');
+  $('#tab-log').innerHTML = `<div class="log-tabs">${tabs}</div>` + S.log.filter((l) => !kinds || kinds.includes(l.kind)).slice(0, 150)
+    .map((l) => `<div class="logline ${l.kind}"><span class="tm">${l.day}日目 ${l.time}</span>${esc(l.text)}</div>`).join('');
+  $('#tab-log').querySelectorAll('[data-lf]').forEach((b) => b.onclick = () => { logFilter = b.dataset.lf; renderLog(); });
 }
 
 function updateToasts() {

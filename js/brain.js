@@ -2,7 +2,7 @@
 // 会話は「意味の読み取り(dialog.js) → ゲームとしての判断 → セリフ」の順で作る。
 // AIが使えるときは、判断した内容をAIにキャラクターの口調で言い換えてもらう（判断はブレない）。
 import { LLM } from './llm.js';
-import { S, day, hour, timeStr, rel, pick, chance, jobName, post, clamp, residents, recentEvents } from './state.js';
+import { S, day, hour, timeStr, rel, pick, chance, jobName, post, clamp, residents, recentEvents, log } from './state.js';
 import { ITEMS, JOBS, TILE, PLAZA, MEAL_COST, DRINK_COST } from './data.js';
 import { facAt } from './world.js';
 import * as Dlg from './dialog.js';
@@ -292,11 +292,19 @@ export function takeTaskReport(c) {
   return d.text;
 }
 
+// 食堂でのひとこと（料理人本人や、あなたが料理人のときは言い方を変える）
+function dinerLines(c) {
+  if (c.job === 'cook') return ['今日のは自信作なんだ。', '味はどう？ 感想を聞かせて。', '作る側だと、食べる時間が一番ほっとするよ。'];
+  if (S.player.job === 'cook') return ['あんたの作るご飯、おいしいよ。', '料理人の仕事、慣れてきた？', 'ここで一緒に食べるのもいいね。'];
+  const cook = residents().find((o) => o.alive && o.job === 'cook' && o !== c);
+  return ['おいしいね。', 'ここの料理、好きなんだ。', cook ? `${cook.name}の料理は町一番だよ。` : 'ここの料理は町一番だよ。'];
+}
+
 // 一緒に過ごしているときのおしゃべり
 export function togetherLine(c, dest) {
   const L = (a, b) => Dlg.lineN(c, [a, b]);
   const opts = dest === 'tavern' ? ['乾杯！', 'ぷはー、うまい！', 'こうやって飲むのもいいね。', 'もう一杯いっちゃう？']
-    : dest === 'diner' ? ['おいしいね。', 'ここの料理、好きなんだ。', 'ヨルの料理は町一番だよ。'] : ['いい時間だね。', 'のんびりできるね。'];
+    : dest === 'diner' ? dinerLines(c) : ['いい時間だね。', 'のんびりできるね。'];
   if (S.wolfKnown && chance(0.3)) { const top = Wolf.suspectLine(c); if (top) return L(`……ここだけの話、${top.name}が怪しいと思ってるんだ。`, `……ここだけの話ですが、${top.name}が気になっています。`); }
   if (chance(0.25)) { const ev = recentEvents(c, 12, ['crime'])[0]; if (ev && !ev.text.includes('よそ者')) return L(`そういえば、${ev.text}んだよ。`, `そういえば、${ev.text}んです。`); }
   return pick(opts);
@@ -1032,7 +1040,7 @@ async function llmPhrase(c, text, history, res) {
       'この内容（事実・誘いを受けるか断るか・数字・人や場所の名前）は絶対に変えずに、あなたの口調で自然な話し言葉に言い直してください。相手の言葉に少し反応してもよい。';
   }
   const sys = selfDesc(c) + '\n' +
-    `話し相手: 最近町に来たよそ者。あなたはこの人を${feeling(r)}。\n` +
+    `話し相手: 最近町に来たよそ者${S.player.job !== 'none' ? `（いまは町で${JOBS[S.player.job].name}として働いている）` : ''}。あなたはこの人を${feeling(r)}。\n` +
     'ルール: 日本語の話し言葉で、短く1〜2文。セリフだけを書く（名前・かぎかっこ・説明は付けない）。AIやゲームの話はしない。\n' + task;
   const msgs = [{ role: 'system', content: sys }];
   for (const h of history.slice(-6)) msgs.push({ role: h.who === 'player' ? 'user' : 'assistant', content: h.text });
@@ -1228,10 +1236,12 @@ export async function dailyIntent(c) {
     const j = await LLM.completeJSON(msgs, { maxTokens: 100, temperature: 0.9 });
     if (j && STANCES.includes(j.stance)) {
       c.intent = { stance: j.stance, target: S.chars.find((x) => x.name === j.target && x.id !== c.id)?.id || null, thought: cleanSay(j.thought) || '' };
+      if (c.intent.thought) log(`🧠 ${c.name}の今日の心の声：「${c.intent.thought}」`, 'mind');
       return;
     }
   }
   c.intent = templateIntent(c);
+  if (c.alive && c.intent?.thought) log(`🧠 ${c.name}の今日の心の声：「${c.intent.thought}」`, 'mind');
 }
 
 function templateIntent(c) {

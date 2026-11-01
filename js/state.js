@@ -78,7 +78,7 @@ export function say(c, text, sec = 4) {
 
 export function log(text, kind = 'info') {
   S.log.unshift({ day: day(), time: timeStr(), text, kind });
-  if (S.log.length > 300) S.log.pop();
+  if (S.log.length > 600) S.log.pop();
 }
 
 export function toast(text) {
