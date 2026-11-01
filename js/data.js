@@ -6,8 +6,8 @@ export const MAP_W = 62;
 export const MAP_H = 36;
 
 export const START_HOUR = 6;          // 1日目 06:00 開始
-export const GAME_MIN_PER_SEC = 6;    // 実時間1秒 = ゲーム内6分
-export const LAST_DAY = 15;           // 15日目の終わりで結果発表
+export const GAME_MIN_PER_SEC = 4;    // 実時間1秒 = ゲーム内4分（起きている1日がおよそ4分）
+export const LAST_DAY = 15;           // 目安の日数（もう自動では終わらない。好きなときに「終わる」で評価が見られる）
 
 // お金のバランス：農家で1時間働くと約3〜4G、食堂の1食が3G、毎朝の税金が4G
 export const MEAL_COST = 3;

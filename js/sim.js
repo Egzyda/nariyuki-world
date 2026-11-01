@@ -169,7 +169,6 @@ function hourly(h, d) {
 }
 
 function daily(d) {
-  if (d > D.LAST_DAY) { S.over = true; return; }
   const y = S.today;
   post('町役場', `【${d}日目の朝刊】昨日の事件${y.crimes}件、亡くなった人${y.deaths}人。食料の蓄え${Math.floor(S.foodStock)}食分。` +
     (S.foodStock < 15 ? '食料が不足しています！' : ''), { authorId: 'town' });
@@ -1216,6 +1215,26 @@ export function jail(t, minutes) {
   t.x = cell[0] * TILE + TILE / 2; t.y = cell[1] * TILE + TILE / 2; t.dir = 'down';
 }
 
+// 衛兵のよそ者が、無実の住民を捕まえたとき：本人は恨み、見た人は噂し、続けばクビ＆話し合い
+function abuseOfPower(t) {
+  const p = S.player;
+  p.abuse = (p.abuse || 0) + 1;
+  addLike(t, p, -40); addFear(t, p, 10);
+  memo(t, 'よそ者に無実の罪で捕まえられた', 'crime');
+  for (const w of witnesses(p, [p, t])) { addLike(w, p, -12); memo(w, `よそ者が無実の${t.name}を捕まえたのを見た`, 'crime'); }
+  for (const o of residents()) if (o.alive && o !== t && rel(o, t).like >= 40) { addLike(o, p, -10); memo(o, `よそ者が${t.name}を理由もなく牢屋に入れたらしい`, 'crime'); }
+  log(`衛兵のよそ者が、証拠もなく${t.name}を捕まえた。`, 'crime');
+  toast(`⚠️ 証拠もなく${t.name}を捕まえた。町の人たちはどう思うだろう……`);
+  const may = Town.mayor();
+  if (p.abuse === 2 && may) { toast(`🏛️ ${may.name}「衛兵のやり方に、苦情が来ているぞ」`); memo(may, 'よそ者の衛兵が横暴だと苦情が来ている', 'info'); }
+  if (p.abuse >= 3 && p.job === 'guard') {
+    p.job = 'none';
+    toast(`🏛️ ${may ? may.name + 'に' : ''}衛兵をクビにされた……`);
+    log('横暴が続いたため、よそ者は衛兵をクビになった。', 'event');
+    if (may && may.alive) Wolf.scheduleMeeting(may.id, 90, 'trial', null, { targetId: 'player', proposer: may.id });
+  }
+}
+
 function doArrest(g, t) {
   if (!S.wanted.has(t.id)) return;
   if (!t.isPlayer && t.coins >= 8 && g.p.greed > 0.6 && g.p.honesty < 0.5 && chance(0.5)) {
@@ -1269,6 +1288,7 @@ function removeItem(c, item) { const i = c.items.indexOf(item); if (i >= 0) c.it
 export function die(c, cause, opts = {}) {
   if (!c.alive) return;
   c.alive = false; c.hp = 0; c.path = []; c.plan = null; c.companion = null;
+  c.diedDay = day(); c.deathCause = cause;   // 住民リストに「〇日目・〜で死亡」と出す
   S.stats.deaths++; S.today.deaths++;
   S.wanted.delete(c.id);
   const [tx, ty] = tilePos(c);
@@ -1714,7 +1734,8 @@ export function charActions(t) {
   acts.push({ id: 'threaten', label: '脅して金を出させる' });
   if (p.job === 'guard') {
     const why = arrestGround(t);
-    acts.push(why ? { id: 'arrest', label: `🛡️ 逮捕する（${why}）` } : { id: 'arrest', label: '🛡️ 逮捕する（悪事の証拠がない）', disabled: true });
+    // 証拠がなくても捕まえられる。ただし無実の人を捕まえると町は黙っていない
+    acts.push(why ? { id: 'arrest', label: `🛡️ 逮捕する（${why}）` } : { id: 'arrest', label: '🛡️ 逮捕する（証拠なし・横暴）', danger: true });
   }
   if (p.job === 'doctor' && t.hp < 85) acts.push({ id: 'treat', label: `🩺 治療してあげる（体力${Math.round(t.hp)}）` });
   return acts;
@@ -1788,9 +1809,10 @@ export function doCharAction(t, act) {
   if (act === 'arrest') {
     // 衛兵の仕事：悪事が知られていれば、その場で手配して捕まえる
     const why = arrestGround(t);
-    if (!why) return toast('逮捕するには、悪事の証拠か手配が必要だ。');
     S.wanted.add(t.id);
-    return doArrest(p, t);
+    doArrest(p, t);
+    if (!why && isJailed(t)) abuseOfPower(t);
+    return;
   }
   if (act === 'treat') {
     p.busyUntil = S.t + 20; p.activity = 'busy'; p.busyStart = S.t;
@@ -1874,6 +1896,26 @@ export function applyTalkResult(t, r) {
     Wolf.addNote(m); out.msgs.push(`📅 ${m}`);
   }
   if (r.meeting) { Wolf.scheduleMeeting('player', 60, 'player'); out.msgs.push('📣 1時間後に広場で話し合いが開かれる'); }
+  if (r.mediate) {
+    const o = byId(r.mediate);
+    if (o) { t.mediation = { with: o.id, t: S.t }; const m = `${o.name}に話して、${t.name}との仲直りを取り持つ`; Wolf.addNote(m); out.msgs.push(`🤝 ${m}`); }
+  }
+  if (r.reconcile || r.softReconcile) {
+    const o = byId(r.reconcile || r.softReconcile);
+    if (o) {
+      const up = r.reconcile ? 35 : 8;
+      const a = rel(t, o), b = rel(o, t);
+      a.like = clamp(Math.max(a.like + up, r.reconcile ? 10 : -100), -100, 100);
+      b.like = clamp(Math.max(b.like + up, r.reconcile ? 10 : -100), -100, 100);
+      if (r.reconcile) {
+        o.mediation = null; t.mediation = null;
+        memo(t, `よそ者のおかげで${o.name}と仲直りした`, 'gift'); memo(o, `よそ者のおかげで${t.name}と仲直りした`, 'gift');
+        addLike(o, p, 8);
+        log(`よそ者の取り持ちで、${o.name}と${t.name}が仲直りした。`, 'event');
+        out.msgs.push(`🤝 ${o.name}と${t.name}が仲直りした！`);
+      } else out.msgs.push(`（${t.name}の${o.name}への気持ちが、少しだけやわらいだ）`);
+    }
+  }
   if (r.warrant) {
     const w = byId(r.warrant);
     if (w) { S.wanted.add(w.id); const m = `${w.name}を捕まえる（衛兵の仕事）`; Wolf.addNote(m); out.msgs.push(`🛡️ ${w.name}を手配した。近づいて「逮捕する」で捕まえられる`); }

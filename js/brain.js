@@ -119,6 +119,7 @@ const byIdC = (id) => S.chars.find((x) => x.id === id) || null;
 const byName = (id) => S.chars.find((x) => x.id === id)?.name || '誰か';
 
 // ================= プレイヤーとの会話 =================
+const TALK_KINDS = new Set(['greet', 'doing', 'howareyou', 'intro', 'opinion', 'opinionMe', 'compliment', 'town', 'weather', 'question', 'thanks', 'apology', 'gossip']);
 export async function talk(c, text, history) {
   const it = Dlg.parseIntent(text, residents(), c);
   // 「それ」「その件」のように名前を言わなくても、直前の話に出た人（悪いことをした人）を話題にする
@@ -128,6 +129,9 @@ export async function talk(c, text, history) {
     it.topic = named.find((o) => Wolf.crimesOf(c, o).length) || named.find((o) => Wolf.knownCrimes(o).length) || null;
   }
   const res = respond(c, it, text);
+  // 雑談（あいさつ・近況・人の評判など）は、AIが会話の流れに沿って自由に返事する。
+  // ルールで作った返事は「参考情報」として渡すだけ（行動や約束がからむ返事は、内容を変えずに言い直してもらう）
+  if (LLM.available() && LLM.strong() && TALK_KINDS.has(it.kind) && res.mode !== 'free') res.mode = 'hint';
   // 小さいAIは日本語が崩れやすいので、内容が決まっている返事（誘い・頼みごと等）は
   // 手書きのセリフをそのまま使い、AIには「決まった答えのない雑談」だけを任せる
   const useAI = LLM.available() && res.say && (res.mode === 'free' || LLM.strong());
@@ -360,6 +364,9 @@ function respond(c, it, raw) {
     else if (/(通報|衛兵|詰所|知らせ)/.test(raw)) it = { ...it, kind: 'reqReport', target: it.target || pt, ask: false };
     else if (it.kind === 'no' || /(様子|放って|ほっと|そっと|見逃|許して|いいや|やめ|大ごと|今回は)/.test(raw)) it = { ...it, kind: 'letGo' };
   }
+  if (pend?.type === 'helpNeed' && pend.need === 'feud' && ['yes', 'help'].includes(it.kind)) it = { ...it, kind: 'mediate', target: byIdC(pend.enemyId) };
+  if (pend?.type === 'helpNeed' && pend.need === 'food' && ['yes', 'help'].includes(it.kind)) it = { ...it, kind: 'helpAccept' };
+  if (pend?.type === 'helpNeed' && ['money', 'hurt'].includes(pend.need) && ['yes', 'help'].includes(it.kind)) it = { ...it, kind: 'helpAccept' };
   if (pend?.type === 'meetingConfirm' && it.kind === 'yes') it = { ...it, kind: 'meeting', target: byIdC(pend.targetId), trial: !!pend.targetId, firm: true };
   if (pend?.type === 'meetingConfirm' && /(様子|放って|そっと|やっぱり|いいや|やめ)/.test(raw)) it = { ...it, kind: 'letGo' };
   if (pend?.type === 'trade' && it.kind === 'askItem' && it.item === pend.item && it.price != null) it = { ...it, kind: 'offer', coins: it.price };
@@ -745,6 +752,15 @@ function respond(c, it, raw) {
       res.warrant = t.id; res.like = gainLike(c, 3);
       break;
     }
+    case 'helpAccept': {
+      const need = pend?.need;
+      res.say = need === 'food' ? Dlg.lineN(c, ['ほんと？ 何か食べ物を分けてもらえたら助かるよ。', '本当ですか？ 何か食べる物をいただけると助かります。'])
+        : need === 'money' ? Dlg.lineN(c, ['少しでいいから、お金を貸してもらえたら……。', '少しで構いませんので、お金を貸していただけたら……。'])
+        : Dlg.lineN(c, ['ありがとう。診療所で診てもらうお金があればなあ……。', 'ありがとうございます。診療所にかかるお金があれば……。']);
+      if (need === 'food') c.pending = { type: 'wantFood', t: S.t };
+      res.like = gainLike(c, 2);
+      break;
+    }
     case 'letGo': {
       res.say = Dlg.lineN(c, ['そうだね、今回は様子を見よう。また何かあったら考えよう。', 'そうですね、今回は様子を見ましょう。また何かあれば、そのときに。']);
       break;
@@ -942,6 +958,33 @@ function respond(c, it, raw) {
         : c.hp < 50 ? (Dlg.toneOf(c).pol ? 'けがをしていて' : 'けがしちゃってて') : enemy ? `${enemy.name}とうまくいってなくて` : null;
       res.say = need ? ln('helpNeed', { need }) : ln('helpNone');
       res.like = gainLike(c, 2);
+      // 困りごとの続き（「仲裁しようか？」「食べ物あげる」などにつなげる）
+      if (need) c.pending = { type: 'helpNeed', need: c.hunger < 40 ? 'food' : c.coins < 2 ? 'money' : c.hp < 50 ? 'hurt' : 'feud', enemyId: enemy?.id, t: S.t };
+      break;
+    }
+    case 'mediate': {
+      // 仲直りの取り持ち。相手（t）は、名前・話の流れ・困りごと・いちばん仲の悪い人の順で決める
+      const enemyOf = (x) => Object.entries(x.rel).filter(([id, v]) => id !== 'player' && v.like < -25).sort((a, b) => a[1].like - b[1].like).map(([id]) => byIdC(id)).find((o) => o?.alive);
+      const named = it.target && it.target !== c ? it.target : null;
+      const t = named || (pend?.type === 'helpNeed' && pend.enemyId ? byIdC(pend.enemyId) : null) || it.topic || enemyOf(c);
+      if (!t) { res.say = Dlg.lineN(c, ['仲直り？ 今は誰ともケンカしてないよ。', '仲直り、ですか？ 今は誰とも揉めていませんよ。']); break; }
+      const tn = Dlg.toneOf(c).pol ? `${t.name}さん` : t.name;
+      const mine = rel(c, t).like;
+      // 相手側から頼まれて、こちらに話しに来た場合
+      if (t.mediation?.with === c.id) {
+        if (mine > -70 && like >= -5) {
+          res.say = Dlg.lineN(c, [`${tn}がそう言ってたの？ ……わかった。{I}も意地を張りすぎたかもな。仲直りするよ。`, `${tn}がそんなことを……。わかりました。私も意地を張っていたかもしれません。仲直りします。`]);
+          res.reconcile = t.id; res.like = gainLike(c, 4);
+        } else {
+          res.say = Dlg.lineN(c, [`${tn}と仲直り？ ……悪いけど、まだそんな気分になれないよ。`, `${tn}と仲直り、ですか……。すみません、まだそういう気持ちにはなれません。`]);
+          res.softReconcile = t.id;
+        }
+        break;
+      }
+      if (mine >= -10) { res.say = Dlg.lineN(c, [`${tn}と？ べつにケンカなんてしてないよ。`, `${tn}とですか？ 特に揉めてはいませんよ。`]); break; }
+      if (like < -10) { res.say = Dlg.lineN(c, ['あんたに口を出されたくないね。', 'あなたに間に入っていただく必要はありません。']); break; }
+      res.say = Dlg.lineN(c, [`あんたが間に入ってくれるの？ ……じゃあ、${tn}に話してみてくれる？ 向こうがその気なら、{I}も仲直りしたい。`, `間に入ってくださるんですか？ ……では、${tn}に話してみていただけますか。向こうにその気があるなら、私も仲直りしたいです。`]);
+      res.mediate = t.id; res.like = gainLike(c, 2);
       break;
     }
     case 'compliment': res.say = ln('compliment'); res.like = gainLike(c, 3); break;
@@ -977,9 +1020,13 @@ function cleanSay(text) {
 async function llmPhrase(c, text, history, res) {
   const r = rel(c, 'player');
   let task;
+  const world = 'この町には村長・役場・衛兵の詰所はあるが、警察や町長はいない。';
+  const free = '直前の会話の流れ（あなたが前に言ったこと）を必ず踏まえ、相手の言葉にかみ合う返事をすること。知らないことは知らないと言う。' +
+    'この町の暮らしでできそうにない提案には、あなたらしく「それは難しい」「どうすればいいかわからない」と答えてよい。相手に何か頼まれても「やっておく」などの約束はしないこと。' + world;
   if (res.mode === 'free') {
-    task = '相手の言葉に、あなたらしく自然に返事してください。知らないことは知らないと言い、話をそらさないこと。' +
-      'この町に町長・役場・警察はない（あるのは衛兵の詰所）。相手に何か頼まれても「やっておく」などの約束はしないこと。';
+    task = '相手の言葉に、あなたらしく自然に返事してください。' + free;
+  } else if (res.mode === 'hint') {
+    task = `相手の言葉に、あなたらしく自然に返事してください。${free}\n参考（あなたの今の状況・考え。使っても使わなくてもよいが、これと食い違うことは言わない）:「${res.say}」`;
   } else {
     task = `あなたの返事の内容はすでに決まっています:「${res.say}」\n` +
       'この内容（事実・誘いを受けるか断るか・数字・人や場所の名前）は絶対に変えずに、あなたの口調で自然な話し言葉に言い直してください。相手の言葉に少し反応してもよい。';
@@ -994,8 +1041,8 @@ async function llmPhrase(c, text, history, res) {
   if (!out) return null;
   // 判断と逆のことを言っていたら採用しない
   if (res.follow && /(無理|やめとく|遠慮|行けない|行かない|断る|パス)/.test(out)) return null;
-  if (/(町長|村長|役場|警察|市長)/.test(out)) return null;
-  if (res.mode === 'free' && /(報告しよう|連絡しよう|連絡する|伝えておく|伝えてくる|行ってくる|やっておく|任せて|引き受け)/.test(out)) return null;
+  if (/(町長|警察|市長)/.test(out)) return null;
+  if ((res.mode === 'free' || res.mode === 'hint') && /(報告しよう|連絡しよう|連絡する|伝えておく|伝えてくる|行ってくる|やっておく|任せて|引き受け)/.test(out)) return null;
   if (res.task && /(無理|できない|お断り|ごめん)/.test(out)) return null;
   if (res.kind === 'invite' && !res.follow && /(行こう|喜んで|いいよ|行きましょう|ついてく)/.test(out)) return null;
   return out;

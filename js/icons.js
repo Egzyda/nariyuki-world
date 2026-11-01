@@ -17,6 +17,7 @@ const P = {
   bowl: '<path d="M3.5 11.5h17a8.5 7 0 0 1-17 0z" fill="currentColor"/><path d="M9 3.5c-1 1.3 1 2.2 0 3.5M13.5 3.5c-1 1.3 1 2.2 0 3.5"/>',
   coin: '<circle cx="12" cy="12" r="8.5" fill="currentColor"/><path d="M12 7.5v9M14.5 9.3c-.6-.9-1.5-1.3-2.6-1.3-1.5 0-2.5.8-2.5 2s1.2 1.6 2.6 2c1.5.4 2.7.9 2.7 2.2 0 1.2-1.1 2.1-2.7 2.1-1.2 0-2.2-.5-2.8-1.4" stroke="#2a2014" stroke-width="1.6"/>',
   bread: '<path d="M4 11.5c0-3.3 3.6-5.5 8-5.5s8 2.2 8 5.5c0 1.1-.7 1.8-1.5 2V19H5.5v-5.5c-.8-.2-1.5-.9-1.5-2z" fill="currentColor"/>',
+  flag: '<path d="M5.5 21V4"/><path d="M5.5 4.5h11l-2.5 4 2.5 4h-11" fill="currentColor" fill-opacity=".25"/>',
   pin: '<path d="M12 21s-6.5-6.2-6.5-11a6.5 6.5 0 0 1 13 0c0 4.8-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/>',
   talk: '<path d="M4 5.5h16v10.5H10l-4.5 3.5V16H4z"/>',
   door: '<path d="M6 20.5V4.5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v16"/><path d="M3.5 20.5h17"/><circle cx="14.5" cy="12.5" r="1" fill="currentColor"/>',

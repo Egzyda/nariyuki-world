@@ -32,7 +32,7 @@
     <p class="desc">
       あなたは町にやってきた「よそ者」。働いて仲良く暮らすのも、盗んで成り上がるのも、口先で住民を操るのも自由。<br>
       住民たちは自分で考え、噂し、ときに裏切る。そして夜には――。<br>
-      <span class="desc-em">15日後、この町はどうなっている？</span>
+      <span class="desc-em">好きなだけ暮らして、町の行く末を見届けよう。</span>
     </p>
     <div class="modes">
       <div class="modes-title">住民の頭脳</div>
@@ -66,6 +66,7 @@
     <canvas id="cv"></canvas>
     <div id="hud"></div>
     <div id="pstats"></div>
+    <div id="todo" hidden></div>
     <div id="toasts"></div>
     <div id="menu" hidden></div>
     <div id="busy" hidden></div>
@@ -107,11 +108,10 @@
     </div>
     <div id="speed">
       <button data-speed="0" title="一時停止（スペース）"><i data-icon="pause"></i></button>
-      <button data-speed="1" class="on" title="ふつうの速さ"><i data-icon="play"></i><b>1</b></button>
-      <button data-speed="2" title="2倍速"><i data-icon="ff"></i><b>2</b></button>
-      <button data-speed="4" title="4倍速"><i data-icon="fff"></i><b>4</b></button>
+      <button data-speed="1" class="on" title="再生"><i data-icon="play"></i></button>
       <button id="map-btn" title="地図（M）"><i data-icon="map"></i></button>
       <button id="save-btn" title="セーブ"><i data-icon="save"></i></button>
+      <button id="end-btn" title="ここで終わって評価を見る"><i data-icon="flag"></i></button>
       <button id="title-btn" title="タイトルへ戻る"><i data-icon="home"></i></button>
       <span class="keyhelp">移動 WASD ／ 走る Shift ／ 話す・調べる F ／ 建物 E ／ 停止⇔×1 Space ／ 地図 M ／ 拡大 ホイール</span>
     </div>

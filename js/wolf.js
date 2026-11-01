@@ -479,18 +479,19 @@ const RING = [[24, 16], [25, 16], [26, 16], [27, 16], [23, 17], [28, 17], [23, 1
 export function meetingActive() { return S.meeting && S.meeting.state !== 'done'; }
 
 // ================= 処遇の話し合い（悪いことをした住民をどうするか） =================
-const CRIME_WORDS = /(盗|殴|襲|忍び込|乱暴|脅|くすね)/;
+const CRIME_WORDS = /(盗|殴|襲|忍び込|乱暴|脅|くすね|無実の)/;
 // 「〜を働く」→「〜を働いた」のように、した事の言い方にそろえる
 const past = (s) => s.replace(/働く$/, '働いた').replace(/入る$/, '入った').replace(/殴る$/, '殴った').replace(/かかる$/, 'かかった').replace(/脅す$/, '脅した').replace(/くすねる$/, 'くすねた');
 // o が覚えている、t がした悪いこと（見た／自分がやられた）。{ text: 「ハルに盗みを働いた」, victim }
 export function crimesOf(o, t) {
   if (!o || !t || o === t) return [];
   const out = [];
+  const tn = t.isPlayer ? 'よそ者' : t.name;   // 住民の記憶では、あなたは「よそ者」
   for (const raw of o.memory) {
     const m = raw.replace(/^\d+日目 /, '');
     if (m.includes('人狼') || !CRIME_WORDS.test(m)) continue;
-    if (m.startsWith(`${t.name}が`)) out.push({ text: past(m.slice(t.name.length + 1).replace(/のを見た$/, '')), victim: false });
-    else if (m.startsWith(`${t.name}に`) && /(盗まれ|殴られ|襲われ|脅され)/.test(m)) out.push({ text: `${o.name}に${/盗/.test(m) ? '盗みを働いた' : /脅/.test(m) ? '脅しをかけた' : '乱暴した'}`, victim: true });
+    if (m.startsWith(`${tn}が`)) out.push({ text: past(m.slice(tn.length + 1).replace(/のを見た$/, '')), victim: false });
+    else if (m.startsWith(`${tn}に`) && /(盗まれ|殴られ|襲われ|脅され|無実の罪)/.test(m)) out.push({ text: `${o.name}に${/盗/.test(m) ? '盗みを働いた' : /脅/.test(m) ? '脅しをかけた' : '乱暴した'}`, victim: true });
   }
   return out;
 }

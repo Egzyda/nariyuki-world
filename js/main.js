@@ -1,5 +1,5 @@
 // 起動・入力・UI
-import { TILE, FACILITIES, BOARD_POS, JOBS, ITEMS, LAST_DAY, PLAZA, JOB_PERKS } from './data.js';
+import { TILE, FACILITIES, BOARD_POS, JOBS, ITEMS, PLAZA, JOB_PERKS, MAP_H } from './data.js';
 import { LLM } from './llm.js';
 import { walkable, facAt, roofedFacAt } from './world.js';
 import { S, day, timeStr, rel, residents, distTiles, isJailed, clamp, toast, log, say } from './state.js';
@@ -150,11 +150,19 @@ function backToTitle() {
   startDemo();
   titleDemo = true;
   renderContinue();
+  // クラウドAIの無料枠の表示を新しくする
+  if (!$('.api input').disabled) { const pct = LLM.usagePct(); $('#api-note').textContent = pct > 0 ? `今日の無料枠：約${pct}%使用${pct >= 100 ? '（使い切り。朝9時に回復）' : '（朝9時にリセット）'}` : ''; }
 }
 
 let lastAutoDay = 0;
 $('#save-btn').onclick = () => toast(Save.save('manual') ? `💾 セーブした（${day()}日目 ${timeStr()}）` : 'セーブに失敗した……');
 $('#title-btn').onclick = backToTitle;
+// 好きなときに終わって、町の評価を見る（そのまま続けることもできる）
+$('#end-btn').onclick = () => {
+  if (!confirm('ここでいったん区切って、町の評価を見ますか？（あとで続けることもできます）')) return;
+  closeChat(); closeMenu(); closePicker();
+  S.endedByChoice = true; S.gameOverReason = null; S.over = true;
+};
 
 function startGame() {
   Sim.initGame(Date.now());
@@ -469,7 +477,7 @@ function openCharMenu(t) {
     const b = document.createElement('button');
     b.innerHTML = `<span class="k">${i + 1}</span>${a.label}`;
     b.disabled = !!a.disabled;
-    if (['attack', 'steal', 'threaten'].includes(a.id)) b.className = 'danger';
+    if (['attack', 'steal', 'threaten'].includes(a.id) || a.danger) b.className = 'danger';
     b.onclick = () => {
       if (a.id === 'talk') { chatTarget = t; closeMenu(); openChat(t); return; }
       closeMenu();
@@ -741,7 +749,9 @@ let boardSig = '';
 function updateUI() {
   const p = S.player;
   if (!p) return;
-  $('#hud').innerHTML = `<b>${day()}日目</b> ${timeStr()}　残り${Math.max(0, LAST_DAY - day())}日　${icon('pin', 'hud-ic')}${whereText()}${aiLoad != null ? `　🧠AI切替中 ${aiLoad}%` : ''}${S.paused && !chatTarget ? '　⏸ 一時停止中' : ''}${S.droughtUntilDay >= day() ? '　☀️日照り' : ''}${aiBadge()}`;
+  // 時計は10分きざみで表示（1分ずつ動くと、せわしなく感じるため）
+  const tm = Math.floor((S.t % 1440) / 10) * 10;
+  $('#hud').innerHTML = `<b>${day()}日目</b> ${String(Math.floor(tm / 60)).padStart(2, '0')}:${String(tm % 60).padStart(2, '0')}　${icon('pin', 'hud-ic')}${whereText()}${aiLoad != null ? `　🧠AI切替中 ${aiLoad}%` : ''}${S.paused && !chatTarget ? '　⏸ 一時停止中' : ''}${S.droughtUntilDay >= day() ? '　☀️日照り' : ''}${aiBadge()}`;
 
   const n = nearestThing();
   const place = n?.type === 'char' ? placeThing() : null;   // 人の近くでも使える建物など
@@ -796,6 +806,7 @@ function updateUI() {
     bn.hidden = false;
   } else bn.hidden = true;
   renderPStats();
+  renderTodo();
   renderStatus();
   renderItems();
   renderPeople();
@@ -806,6 +817,51 @@ function updateUI() {
   updateCallout();
   updateMeetingPanel();
   if (chatTarget) updateChatRel();
+}
+
+// ---------- やることリスト（頼まれごと・相談・約束）。✕で消せる、📝で開き直せる ----------
+const todoOff = new Set();      // 個別に消したもの
+let todoClosed = null;          // まとめて閉じたか（null＝まだ決めていない：スマホは小さく、PCは開いておく）
+let todoCount = 0;
+function todoItems() {
+  const out = [];
+  const nm = (id) => (id === 'player' ? 'あなた' : S.chars.find((c) => c.id === id)?.name || '?');
+  const hm = (t) => `${Math.floor((t % 1440) / 60)}時`;
+  for (const c of residents()) {
+    if (!c.alive) continue;
+    if (c.quest && S.t < c.quest.until) out.push({ k: `q:${c.id}:${c.quest.label}`, t: `📝 ${c.name}に${c.quest.label}を届ける（お礼${c.quest.reward}G）` });
+    if (c.appointment) out.push({ k: `a:${c.id}:${c.appointment.at}`, t: `⏳ ${c.appointment.loose ? '' : hm(c.appointment.at) + 'に'}${Dlg.placeName(c.appointment.place)}で${c.name}が待つ` });
+    if (c.mediation) out.push({ k: `m:${c.id}:${c.mediation.with}`, t: `🤝 ${nm(c.mediation.with)}に話して、${c.name}と仲直りさせる` });
+    const pd = c.pending && S.t - c.pending.t < 180 ? c.pending : null;
+    if (pd?.type === 'crimeWhat') out.push({ k: `p:${c.id}:${pd.t}`, t: `💬 ${c.name}の相談：${nm(pd.targetId)}のことをどうする？（通報・話し合い・様子見）` });
+    if (pd?.type === 'meetingConfirm') out.push({ k: `p:${c.id}:${pd.t}`, t: `💬 ${c.name}：広場に集まってもらうか返事待ち` });
+    if (pd?.type === 'helpNeed') out.push({ k: `p:${c.id}:${pd.t}`, t: `💬 ${c.name}の困りごと：${{ food: 'お腹が空いている', money: 'お金に困っている', hurt: 'けがをしている', feud: (nm(pd.enemyId) || '誰か') + 'とうまくいっていない' }[pd.need]}` });
+  }
+  const m = S.meeting;
+  if (m && m.state === 'planned') out.push({ k: `mt:${m.at}`, t: `📣 ${hm(m.at)}に広場で話し合い${(m.trials || []).length ? `（${m.trials.map((tr) => Wolf.trialTitle(tr)).join('、')}）` : ''}` });
+  if (S.player.job === 'guard') for (const id of S.wanted) if (id !== 'player') out.push({ k: `w:${id}`, t: `🛡️ 手配中：${nm(id)}（近づいて逮捕できる）` });
+  return out.filter((x) => !todoOff.has(x.k));
+}
+function renderTodo() {
+  const el = $('#todo');
+  const items = todoItems();
+  // 位置：右上（地図を出しているときはその下）
+  const top = (isMobile() ? 64 : 10) + (view.showMinimap ? MAP_H * 3 + 12 : 0);
+  if (el.style.top !== top + 'px') el.style.top = top + 'px';
+  if (!items.length) { el.hidden = true; el._h = ''; return; }
+  el.hidden = false;
+  if (todoClosed === null) todoClosed = isMobile();
+  const grew = items.length > todoCount; todoCount = items.length;
+  const html = todoClosed
+    ? `<button class="todo-open" title="やることを表示">📝 ${items.length}</button>`
+    : `<div class="todo-head">📝 やること<button class="todo-x" data-all="1" title="閉じる">✕</button></div>` +
+      items.map((x) => `<div class="todo-item"><span>${esc(x.t)}</span><button class="todo-x" data-k="${esc(x.k)}" title="この項目を消す">✕</button></div>`).join('');
+  if (grew && todoClosed) el.classList.remove('pulse'), void el.offsetWidth, el.classList.add('pulse');
+  if (el._h === html) return;
+  el._h = html; el.innerHTML = html;
+  el.querySelectorAll('.todo-x').forEach((b) => b.onclick = (e) => { e.stopPropagation(); if (b.dataset.all) todoClosed = true; else todoOff.add(b.dataset.k); renderTodo(); });
+  const o = el.querySelector('.todo-open');
+  if (o) o.onclick = () => { todoClosed = false; renderTodo(); };
 }
 
 // いつも見える自分の状態（体力・満腹度・お金・食料）
@@ -892,10 +948,12 @@ function renderItems() {
 
 function renderPeople() {
   const p = S.player;
-  const list = residents().slice().sort((a, b) => (b.alive - a.alive) || (b.key - a.key));
+  // 並び順は変えない（亡くなった人も元の場所に、黒く残す）
+  const list = residents().slice().sort((a, b) => (b.key - a.key));
   $('#tab-people').innerHTML = list.map((c) => {
     const r = rel(c, p);
-    const st = c.undiscovered ? '' : !c.alive ? (c.killedBy ? '🐺🪦' : '🪦') : isJailed(c) ? `🔒${Sim.jailText(c)}` : S.wanted.has(c.id) ? '🚨' : c.companion ? '🤝' : c.activity === 'sleep' ? '💤' : '';
+    const deadNow = !c.alive && !c.undiscovered;
+    const st = c.undiscovered ? '' : !c.alive ? `🪦 ${c.diedDay ? c.diedDay + '日目・' : ''}${c.killedBy || c.deathCause === '人狼' ? '人狼に襲われた' : c.deathCause ? esc(String(c.deathCause)) + 'で死亡' : '死亡'}` : isJailed(c) ? `🔒${Sim.jailText(c)}` : S.wanted.has(c.id) ? '🚨' : c.companion ? '🤝' : c.activity === 'sleep' ? '💤' : '';
     const likeW = Math.abs(r.like);
     const detail = expanded === c.id ? `<div class="detail">
       ${c.persona ? esc(c.persona) + '<br>' : ''}
@@ -906,7 +964,8 @@ function renderPeople() {
       ${c.items.length ? '<br>持ち物：' + c.items.map((i) => ITEMS[i].name).join('、') : ''}
       <br>記憶：${c.memory.slice(-3).map(esc).join(' / ') || 'なし'}
     </div>` : '';
-    return `<div class="person ${c.alive || c.undiscovered ? '' : 'dead'}" data-id="${c.id}">
+    if (deadNow) return `<div class="person dead" data-id="${c.id}"><div class="top"><span><s>${c.name}</s> <small>${JOBS[c.job].name}</small></span><span class="dead-tag">${st}</span></div></div>`;
+    return `<div class="person" data-id="${c.id}">
       <div class="top"><span>${c.name} <small>${JOBS[c.job].icon}${JOBS[c.job].name}</small></span><span>${st}</span></div>
       <div class="relbar">好感<div class="meter"><i style="width:${likeW}%;background:${r.like >= 0 ? '#6ac060' : '#d05050'}"></i></div>${Math.round(r.like)}
       　恐怖<div class="meter"><i style="width:${r.fear}%;background:#a070d0"></i></div>${Math.round(r.fear)}</div>
@@ -1071,11 +1130,13 @@ function showResult() {
   if (S.wolf?.confirmed && p.alive) verdict = S.wolf.playerAccused.has(S.wolf.id) ? 'あなたが人狼を暴いた町' : '人狼を退けた町';
   else if (S.wolf && S.wolf.kills.length >= 4) verdict = '人狼に怯え続けた町';
   $('#result-box').innerHTML = `
-    <h2>${p.alive ? `${LAST_DAY}日間が過ぎた` : 'ゲームオーバー'}</h2>
+    <h2>${p.alive ? `${day()}日目までの町の記録` : 'ゲームオーバー'}</h2>
     ${S.gameOverReason ? `<p>${esc(S.gameOverReason)}</p>` : ''}
     <div class="big-title">「${verdict}」</div>
     <p>あなたの立場：<b>${Sim.titleFor(inf)}</b>（影響力 ${Math.round(inf.ratio * 100)}%）</p>
-    <p class="wolf-reveal">🐺 人狼の正体は <b>${esc(Wolf.wolfChar()?.name || '?')}</b> でした。${S.wolf?.confirmed ? '町は人狼を突き止めた！' : '人狼は最後まで正体を隠し通した……'}（犠牲者 ${S.wolf?.kills.length || 0}人）</p>
+    ${p.alive && S.endedByChoice && !S.wolf?.confirmed
+      ? `<p class="wolf-reveal" id="wolf-hide">🐺 人狼はまだ見つかっていない（犠牲者 ${S.wolf?.kills.length || 0}人）<br><button id="wolf-show" class="ghost">正体を見る（ネタバレ）</button></p>`
+      : `<p class="wolf-reveal">🐺 人狼の正体は <b>${esc(Wolf.wolfChar()?.name || '?')}</b> でした。${S.wolf?.confirmed ? '町は人狼を突き止めた！' : '人狼は最後まで正体を隠し通した……'}（犠牲者 ${S.wolf?.kills.length || 0}人）</p>`}
     <table>
       <tr><td>生き残った住民</td><td>${alive} / ${total}人</td></tr>
       <tr><td>事件の数</td><td>${st.crimes}件</td></tr>
@@ -1086,9 +1147,14 @@ function showResult() {
       <tr><td>亡くなった人</td><td>${st.deaths}人</td></tr>
       <tr><td>あなたの所持金</td><td>${Math.floor(p.coins)}G</td></tr>
     </table>
-    <button class="big" id="again">もう一度</button>`;
+    ${p.alive && S.endedByChoice ? '<button class="big" id="keep">このまま続ける</button><br><br>' : ''}
+    <button class="big" id="again">新しい町で始める</button>`;
   $('#result').hidden = false;
-  $('#again').onclick = () => { $('#result').hidden = true; S.gameOverReason = null; startGame(); };
+  $('#again').onclick = () => { $('#result').hidden = true; S.gameOverReason = null; S.endedByChoice = false; startGame(); };
+  const ws = $('#wolf-show');
+  if (ws) ws.onclick = () => { $('#wolf-hide').innerHTML = `🐺 人狼の正体は <b>${esc(Wolf.wolfChar()?.name || '?')}</b>。（知ってしまった……）`; };
+  const keep = $('#keep');
+  if (keep) keep.onclick = () => { $('#result').hidden = true; S.over = false; S.endedByChoice = false; S.gameOverReason = null; setSpeed(1); };
 }
 
 // デバッグ用

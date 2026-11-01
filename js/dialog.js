@@ -183,6 +183,8 @@ export function parseIntent(text, residents, self) {
   if (TREAT_ASK.test(t)) return { ...r, kind: 'askMoney' };
   if (/(金|かね|コイン|お金|おかね|\dG|G)/.test(t) && ASK.test(t)) return { ...r, kind: 'askMoney' };
   if (/(食べ物|たべもの|ご飯|ごはん|食料|しょくりょう|パン|飯|めし|野菜)/.test(t) && ASK.test(t)) return { ...r, kind: 'askFood' };
+  // 仲直り・仲裁（「仲裁しようか？」「ツヅミと仲直りしたら？」「間に入ろうか」）
+  if (/(仲裁|仲直り|なかなおり|仲を取り持|取り持と|取り持って|間に入|あいだに入|和解)/.test(t)) return { ...r, kind: 'mediate' };
   // 人について
   if (r.target) {
     if (/(どこ|居場所|見かけ|見なかった)/.test(t)) return { ...r, kind: 'whereIs' };
@@ -202,7 +204,8 @@ export function parseIntent(text, residents, self) {
   if (/(天気|てんき|暑い|あつい|寒い|さむい|晴れ|雨|日照り|空が|空は|星が|星空|月が|風が|景色|夕日|夕焼け|朝日)/.test(t)) return { ...r, kind: 'weather' };
   if (/(手伝|てつだ|困って|こまって|助けよう|助けたい|力になる|何かできる|なにかできる)/.test(t)) return { ...r, kind: 'help' };
   if (NICE.test(t)) return { ...r, kind: 'compliment' };
-  if (/(こんにちは|こんちは|こんばんは|おはよう|やあ|よう|どうも|ハロー|はろー|ちーっす|こんにちわ|もしもし)/.test(t)) return { ...r, kind: 'greet' };
+  // あいさつは文の頭だけ（「仲裁しようか」の「よう」などを拾わない）
+  if (/^(こんにちは|こんちは|こんばんは|おはよう|やあ|よう[!！。、]?$|ようっ|どうも|ハロー|はろー|ちーっす|こんにちわ|もしもし)/.test(t)) return { ...r, kind: 'greet' };
   if (RUDE.test(t)) return { ...r, kind: 'insult' };
   if (/(教えて|おしえて|って何|ってなに|とは|知ってる|しってる|わかる|分かる|どう思う|なぜ|なんで|どうして)/.test(t)) return { ...r, kind: 'question' };
   return { ...r, kind: q ? 'question' : 'unknown' };

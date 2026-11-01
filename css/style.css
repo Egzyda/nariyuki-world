@@ -397,3 +397,21 @@ body.mobile #busy { top: auto; bottom: 124px; font-size: 13px; }
 body.mobile #banner { top: 58px; }
 #meeting-ctrl .votes button[data-r="forgive"] { background: #3a6a40; }
 #meeting-ctrl .votes button[data-r="abstain"], #meeting-ctrl .votes button[data-v="abstain"] { background: #2c3824; }
+/* 亡くなった住民：元の場所に黒く残す */
+.person.dead { opacity: 1 !important; background: #0a0c08 !important; border: 1px solid #2a2a2a; filter: grayscale(1); }
+.person.dead .top span:first-child { color: #777; }
+.person.dead .dead-tag { font-size: 11px; color: #999; }
+
+/* ---- やることリスト ---- */
+#todo { position: absolute; right: 10px; top: 10px; width: min(260px, 50%); max-height: 34%; overflow-y: auto; background: rgba(14,18,10,.82);
+  border: 1px solid #6a8a50; border-radius: 8px; font-size: 12px; z-index: 2; }
+#todo .todo-head { display: flex; align-items: center; padding: 4px 8px; color: #ffe9a0; font-weight: bold; background: rgba(42,53,34,.9); position: sticky; top: 0; }
+#todo .todo-item { display: flex; align-items: flex-start; gap: 4px; padding: 4px 8px; border-top: 1px solid #2a3322; line-height: 1.45; }
+#todo .todo-item span { flex: 1; }
+#todo .todo-x { margin-left: auto; padding: 0 6px; background: none; color: #9a9; font-size: 12px; line-height: 1.4; }
+#todo .todo-open { background: rgba(14,18,10,.85); color: #ffe9a0; font-size: 13px; padding: 4px 10px; }
+#todo:has(.todo-open) { width: auto; border: none; background: none; }
+body.mobile #todo { right: 6px; width: min(230px, 58%); font-size: 11px; max-height: 26%; }
+#toasts { z-index: 3; }
+#todo.pulse .todo-open { animation: pulse 1.6s 3; }
+#result-box .ghost { background: #2c3824; font-size: 13px; margin-top: 6px; }
