@@ -116,6 +116,7 @@ function wolfDesc(c) {
     const top = Wolf.suspectLine(c);
     if (top && !c.isWolf) t += `あなたが一番疑っているのは${top.t.name}（${top.why}から）。`;
   }
+  if (c.isWolf) { const mates = Wolf.wolves().filter((x) => x !== c && x.alive).map((x) => x.name); if (mates.length) t += `\n【秘密】仲間の人狼は${mates.join('・')}。かばい合うこと。`; }
   if (c.isWolf) t += `\n【秘密】あなたの正体は人狼。絶対に自分から明かさない。疑われてもとぼけて、${S.wolf.frame ? byName(S.wolf.frame) + 'が怪しいと' : '他の人に'}話をそらす。`;
   return t;
 }
@@ -677,13 +678,22 @@ function respond(c, it, raw) {
       const rule = Town.parseRule(raw);
       if (!rule) { res.say = Dlg.lineN(c, ['それならもう決まってるよ。', 'それはもう決まっていますよ。']); break; }
       const d = Town.describe(rule);
+      const need = Town.ratioText(Town.threshold(rule));
       if (c.job === 'mayor') {
-        res.say = Dlg.lineN(c, [`「${d}」か……わかった、次の話し合いでみんなに諮ろう。`, `「${d}」ですか……わかりました。次の話し合いで皆さんに諮りましょう。`]);
+        res.say = Dlg.lineN(c, [`「${d}」か……わかった、次の話し合いでみんなに諮ろう。決まるには${need}の賛成がいるぞ。`, `「${d}」ですか……わかりました。次の話し合いで皆さんに諮りましょう。${need}の賛成が必要です。`]);
         res.rule = rule;
       } else {
         const sp = Town.support(c, rule, 'player');
-        res.say = Dlg.lineN(c, [`「${d}」？ ${sp >= 0.5 ? '{I}は賛成だな。' : '{I}は反対だな。'}決まりを変えたいなら、村長のゲンジさんに話すか、広場の話し合いで提案してみたら？`,
-          `「${d}」ですか。${sp >= 0.5 ? '私は賛成です。' : '私は反対です。'}決まりを変えるなら、村長のゲンジさんに相談するか、話し合いで提案してみてください。`]);
+        const may = Town.mayor();
+        if (sp >= 0.55 && like >= 5) {
+          // 賛成なら、自分から話し合いを呼びかけてくれる
+          res.say = Dlg.lineN(c, [`「${d}」か。{I}も賛成だ。みんなに声をかけて話し合おう。${need}の賛成がいるけどね。`, `「${d}」ですか。私も賛成です。皆さんに声をかけて話し合いましょう。${need}の賛成が必要ですが。`]);
+          res.rule = rule;
+        } else {
+          const where = may && !may.isPlayer ? `村長の${may.name}に話すか、` : '';
+          res.say = Dlg.lineN(c, [`「${d}」？ ${sp >= 0.5 ? '{I}は賛成だな。' : '{I}は反対だな。'}決まりを変えたいなら、${where}広場の話し合いで提案してみたら？`,
+            `「${d}」ですか。${sp >= 0.5 ? '私は賛成です。' : '私は反対です。'}決まりを変えるなら、${where}話し合いで提案してみてください。`]);
+        }
       }
       break;
     }
@@ -807,6 +817,40 @@ function respond(c, it, raw) {
       } else {
         res.say = Dlg.lineN(c, ['……内容によるな。{I}は{I}で考えて決めるよ。', '……内容によります。自分で考えて決めますね。']);
       }
+      break;
+    }
+    case 'fortune': {
+      // 占いを頼む
+      const t = it.target && it.target !== c ? it.target : null;
+      if (c.job !== 'seer') { const sr = residents().find((o) => o.job === 'seer' && o.alive); res.say = Dlg.lineN(c, [`占いなら${sr ? sr.name : '占い師'}に頼むといいよ。酒場の片隅にいることが多いね。`, `占いでしたら、${sr ? sr.name + 'さん' : '占い師'}に頼んでみてください。酒場にいることが多いですよ。`]); break; }
+      if (!t) { res.say = Dlg.lineN(c, ['誰を占えばいい？ 名前を言ってくれれば占うよ。5Gね。', 'どなたを占いましょう？ お名前を教えてください。5Gいただきます。']); break; }
+      if (S.player.coins < 5) { res.say = Dlg.lineN(c, ['占いは5Gなんだ。お金が足りないみたい。', '占いは5Gいただいています。足りないようですね。']); break; }
+      res.say = Dlg.lineN(c, [`${t.name}だね。……ちょっと待って、見てみる。`, `${t.name}さんですね。……少しお待ちください、見てみます。`]);
+      res.reading = t.id;
+      break;
+    }
+    case 'election': {
+      // 選挙・立候補・不信任
+      const may = Town.mayor();
+      if (!S.rules.mayorOffice) {
+        const sp = Town.support(c, { key: 'mayorOffice', value: true }, 'player');
+        res.say = sp >= 0.5
+          ? Dlg.lineN(c, ['この町には村長がいないんだ。まず「村長を置く」って話し合いで決めよう。{I}が声をかけるよ。', 'この町には村長がいません。まず「村長を置く」と話し合いで決めましょう。声をかけておきます。'])
+          : Dlg.lineN(c, ['村長？ この町にそんなものはないよ。{I}はいらないと思うけどね。', '村長……この町にはいませんし、私は必要ないと思います。']);
+        if (sp >= 0.5) res.rule = { key: 'mayorOffice', value: true };
+        if (it.run) S.playerCandidate = true;
+        break;
+      }
+      if (Wolf.meetingActive()) { res.say = Dlg.lineN(c, ['次の話し合いで言ってみたら？', '次の話し合いで提案してみてください。']); if (it.run) S.playerCandidate = true; break; }
+      const dislikeMayor = may && !may.isPlayer && rel(c, may).like < -10;
+      if (may === c) { res.say = Dlg.lineN(c, ['{I}を降ろしたいって？ ……やれるものならやってみな。', '私を辞めさせたいのですか。……では、選挙で決めましょう。']); res.election = true; if (it.run) S.playerCandidate = true; break; }
+      if (dislikeMayor || like >= 15 || (it.run && like >= 5)) {
+        res.say = it.run
+          ? Dlg.lineN(c, ['あんたが村長に？ ……面白いね。選挙をやろう。みんなに声をかけるよ。', 'あなたが村長に、ですか。……選挙で決めましょう。皆さんに声をかけます。'])
+          : Dlg.lineN(c, ['選挙か。そうだな、村長を選び直すのもいいかもしれない。', '選挙ですか。……そうですね、選び直すのもいいかもしれません。']);
+        res.election = true;
+        if (it.run) S.playerCandidate = true;
+      } else res.say = Dlg.lineN(c, [`今の村長${may?.isPlayer ? '（あんた）' : 'の' + (may?.name || '')}で十分だと思うけどな。`, `今の村長${may?.isPlayer ? '（あなた）' : 'の' + (may?.name || '') + 'さん'}で十分だと思いますが……。`]);
       break;
     }
     case 'letGo': {

@@ -6,21 +6,70 @@ import { facAt } from './world.js';
 import * as Sim from './sim.js';
 import * as Wolf from './wolf.js';
 
-export function initTown() {
-  S.rules = { tax: 4, curfew: false, patrol: false, ration: false, weaponBan: false };
-  S.treasury = 30;
+// ---- 法律 ----
+// 普通の町：盗み・暴力は禁止、牢屋・村長・衛兵あり、決め方は「決まりの重さで必要な賛成を変える」
+// 無法の町：何もない。決め方（method）も決まっていない。最初の話し合いで、まず決め方から決める
+const NORMAL = { tax: 4, curfew: false, patrol: false, ration: false, weaponBan: false, theftBan: true, violenceBan: true, jail: true, mayorOffice: true, guardOffice: true, method: 'standard' };
+const LAWLESS = { tax: 0, curfew: false, patrol: false, ration: false, weaponBan: false, theftBan: false, violenceBan: false, jail: false, mayorOffice: false, guardOffice: false, method: null };
+
+export function initTown(setup = { law: 'normal' }) {
+  const lawless = setup.law === 'lawless';
+  S.rules = { ...(lawless ? LAWLESS : NORMAL) };
+  S.treasury = lawless ? 0 : 30;
   S.taxDebt = {};
   S.bounty = 0;
+  if (lawless) {
+    // 役職のない町：村長も衛兵もいない。元の役職の人は、ただの町の人として暮らす
+    for (const c of residents()) {
+      if (c.job === 'mayor' || c.job === 'guard') {
+        c.formerJob = c.job; c.job = 'none';
+        c.persona = c.persona.replace('この町の村長をつとめる', '町の長老の').replace(/村長/g, '長老').replace(/衛兵/g, '腕っぷし自慢');
+      }
+    }
+  }
+}
+// 古いセーブにない決まりを補う
+export function normalize() { S.rules = { ...NORMAL, ...(S.rules || {}) }; }
+export const lawless = () => S.settings?.law === 'lawless';
+
+// 悪いことが「法律違反」かどうか（違反のときだけ手配される。個人の怒りは法律と関係なく残る）
+export function illegal(type) {
+  const r = S.rules || NORMAL;
+  if (!r.guardOffice) return false;   // 取り締まる人がいない
+  if (type === 'theft') return r.theftBan;
+  if (type === 'violence') return r.violenceBan;
+  return r.theftBan || r.violenceBan;
 }
 
-export const mayor = () => residents().find((c) => c.job === 'mayor' && c.alive) || null;
+// ---- 法律の重さと、必要な賛成の割合 ----
+const WEIGHT = { tax: 'light', ration: 'light', patrol: 'heavy', curfew: 'heavy', weaponBan: 'heavy', theftBan: 'heavy', violenceBan: 'heavy', jail: 'heavy', mayorOffice: 'heavy', guardOffice: 'heavy', method: 'very' };
+const METHOD = {
+  majority: { light: 0.5, heavy: 0.5, very: 2 / 3, label: '何でも過半数で決める' },
+  standard: { light: 0.5, heavy: 2 / 3, very: 3 / 4, label: '決まりの重さで変える（軽い:過半数／重い:3分の2／とても重い:4分の3）' },
+  strict: { light: 2 / 3, heavy: 3 / 4, very: 4 / 5, label: '慎重に決める（軽い:3分の2／重い:4分の3／とても重い:5分の4）' },
+};
+export function threshold(rule) {
+  const m = METHOD[S.rules.method];
+  if (!m) return 3 / 4;   // 決め方が決まっていない町では、最初は4分の3の賛成が必要
+  return m[WEIGHT[rule.key] || 'heavy'];
+}
+export const ratioText = (r) => (r <= 0.5 ? '過半数' : Math.abs(r - 2 / 3) < 0.01 ? '3分の2以上' : Math.abs(r - 3 / 4) < 0.01 ? '4分の3以上' : '5分の4以上');
+export const methodLabel = () => METHOD[S.rules.method]?.label || 'まだ決まっていない（まず決め方から決める）';
+// 話し合いに必要な人数：住民の半分以上
+export const quorum = () => Math.ceil(residents().filter((c) => c.alive && !isJailed(c)).length / 2);
+
+// 村長（あなたが村長のこともある）
+export const mayor = () => (S.player?.job === 'mayor' && S.player.alive ? S.player : residents().find((c) => c.job === 'mayor' && c.alive) || null);
 const mayorWorking = () => { const m = mayor(); return m && !isJailed(m); };
 
 // ---- 決まりの説明 ----
 export function describe(rule) {
   const { key, value } = rule;
   if (key === 'tax') return value === 0 ? '税金をなくす' : `税金を1日${value}Gにする`;
+  if (key === 'method') return `法律の決め方を「${METHOD[value]?.label || value}」にする`;
   const on = {
+    theftBan: '盗みの禁止（見つかれば手配され、衛兵に捕まる）', violenceBan: '暴力・脅しの禁止（見つかれば手配され、衛兵に捕まる）',
+    jail: '牢屋を使う（悪いことをした人を閉じ込められる）', mayorOffice: '村長を置く（選挙で選ぶ）', guardOffice: '衛兵を置く（町の見張り役。法律を取り締まる）',
     curfew: '夜間外出禁止（夜9時〜朝5時は外に出ない）', patrol: '夜の見回り強化（衛兵が毎晩見回る）',
     ration: '食料の配給（貧しい人に毎朝、金庫から食料を配る）', weaponBan: '武器の持ち歩き禁止（見つかれば没収・罰金）',
   }[key];
@@ -29,7 +78,12 @@ export function describe(rule) {
 
 export function rulesText() {
   const r = S.rules;
-  const list = [`税金 1日${r.tax}G`];
+  const list = [r.tax ? `税金 1日${r.tax}G` : '税金なし'];
+  list.push(r.theftBan ? '盗みは禁止' : '盗みを禁じる法律はない');
+  list.push(r.violenceBan ? '暴力は禁止' : '暴力を禁じる法律はない');
+  if (!r.jail) list.push('牢屋は使わない');
+  if (!r.mayorOffice) list.push('村長なし');
+  if (!r.guardOffice) list.push('衛兵なし');
   if (r.curfew) list.push('夜間外出禁止');
   if (r.patrol) list.push('夜の見回り強化');
   if (r.ration) list.push('食料の配給');
@@ -51,6 +105,14 @@ export function parseRule(text) {
   else if (/(見回り|パトロール|夜警)/.test(t) && /(増や|強化|しよう|始め|やろう|して|やめ)/.test(t)) rule = { key: 'patrol', value: !stop };
   else if (/(配給|食料を配|食べ物を配)/.test(t)) rule = { key: 'ration', value: !stop };
   else if (/武器/.test(t) && /禁止/.test(t)) rule = { key: 'weaponBan', value: !stop };
+  else if (/(盗み|泥棒|窃盗|盗む)/.test(t) && /(禁止|ダメ|だめ|罰|法律|取り締ま|許さない|いけない)/.test(t)) rule = { key: 'theftBan', value: !(stop || /(禁止をやめ|許そう|自由に)/.test(t)) };
+  else if (/(暴力|殴る|ケンカ|けんか|喧嘩|脅し)/.test(t) && /(禁止|ダメ|だめ|罰|法律|取り締ま|許さない|いけない)/.test(t)) rule = { key: 'violenceBan', value: !stop };
+  else if (/牢屋/.test(t) && /(使|作|置|閉じ込め|入れられる)/.test(t)) rule = { key: 'jail', value: !stop };
+  else if (/村長/.test(t) && /(置こう|置く|作ろう|決めよう|選ぼう|いらない|なくそ|廃止)/.test(t) && !/選挙/.test(t)) rule = { key: 'mayorOffice', value: !(stop || /いらない/.test(t)) };
+  else if (/衛兵/.test(t) && /(置こう|置く|作ろう|いらない|なくそ|廃止)/.test(t)) rule = { key: 'guardOffice', value: !(stop || /いらない/.test(t)) };
+  else if (/(決め方|多数決|過半数|3分の2|三分の二|4分の3|四分の三|全員一致)/.test(t) && /(決め|しよう|にする|変え)/.test(t)) {
+    rule = { key: 'method', value: /過半数|多数決/.test(t) ? 'majority' : /(4分の3|四分の三|慎重|全員)/.test(t) ? 'strict' : 'standard' };
+  }
   if (!rule || r[rule.key] === rule.value) return null;
   return rule;
 }
@@ -65,6 +127,12 @@ export function support(c, rule, proposer) {
     case 'curfew': s = 0.25 + fear + c.p.honesty * 0.2 - c.p.sociability * 0.15 - (c.isWolf ? 0.6 : 0); break;
     case 'patrol': s = 0.3 + fear + c.p.honesty * 0.15 - (c.job === 'guard' ? 0.15 : 0) - (c.isWolf ? 0.5 : 0); break;
     case 'ration': s = 0.35 + c.p.sociability * 0.25 - c.p.greed * 0.35 + (poor ? 0.3 : 0); break;
+    case 'theftBan': s = 0.45 + c.p.honesty * 0.4 - c.p.greed * 0.25 + (c.memory.some((m) => /盗まれ/.test(m)) ? 0.25 : 0); break;
+    case 'violenceBan': s = 0.45 + c.p.honesty * 0.3 - c.p.aggression * 0.4 + (c.memory.some((m) => /殴られ|脅され/.test(m)) ? 0.25 : 0); break;
+    case 'jail': s = 0.4 + c.p.honesty * 0.3 - c.p.aggression * 0.15 + fear; break;
+    case 'mayorOffice': s = 0.45 + c.p.sociability * 0.2 + c.p.honesty * 0.1 + (ambition(c) > 0.7 ? 0.2 : 0); break;
+    case 'guardOffice': s = 0.4 + c.p.honesty * 0.3 + fear - (1 - c.p.honesty) * 0.2 + (c.formerJob === 'guard' ? 0.3 : 0); break;
+    case 'method': s = S.rules.method ? (value === 'majority' ? 0.4 + (1 - c.p.honesty) * 0.3 : value === 'strict' ? 0.35 + c.p.honesty * 0.3 : 0.5) : 0.75 + c.p.honesty * 0.15; break;
     case 'weaponBan': s = 0.4 + c.p.honesty * 0.25 - c.p.aggression * 0.45 - (c.items.includes('weapon') ? 0.3 : 0); break;
     case 'tax':
       s = value > S.rules.tax
@@ -73,14 +141,18 @@ export function support(c, rule, proposer) {
       break;
     default: s = 0.5;
   }
-  if (key !== 'tax' && !value) s = 1 - s;
+  if (key !== 'tax' && key !== 'method' && !value) s = 1 - s;
   if (proposer === 'player') s += (Wolf.trust(c, 'player') - 0.6) * 0.35;
   else if (proposer && proposer !== c.id) s += rel(c, proposer).like / 300;
   return clamp(s, 0, 1);
 }
 
+// 町をまとめたい気持ちの強さ（村長になりたがる人）
+export function ambition(c) { return c.p.sociability * 0.4 + c.p.greed * 0.3 + c.p.aggression * 0.2 + (c.formerJob === 'mayor' || c.job === 'mayor' ? 0.3 : 0) + (/牛耳/.test(c.persona || '') ? 0.3 : 0); }
+
 export function applyRule(rule) {
   S.rules[rule.key] = rule.value;
+  sideEffects(rule);
   const d = describe(rule);
   post('町役場', `【町の決まり】話し合いの結果、「${d}」が決まりました。`, { authorId: 'town' });
   log(`町の決まりが変わった：${d}`, 'event');
@@ -89,8 +161,81 @@ export function applyRule(rule) {
   for (const c of residents()) if (c.alive) memo(c, `話し合いで「${d}」が決まった`, 'meeting');
 }
 
+// 決まりが変わったときに町で起きること（衛兵を任命する・村長を選ぶ・牢屋を開ける など）
+function sideEffects(rule) {
+  const { key, value } = rule;
+  if (key === 'guardOffice') {
+    if (value) {
+      const cands = residents().filter((c) => c.alive && !isJailed(c) && (c.job === 'none' || c.formerJob === 'guard') && c.job !== 'mayor')
+        .sort((a, b) => (b.formerJob === 'guard') - (a.formerJob === 'guard') || (b.p.aggression + b.p.honesty) - (a.p.aggression + a.p.honesty)).slice(0, 2);
+      for (const c of cands) { c.formerJob = c.job === 'guard' ? c.formerJob : c.job; c.job = 'guard'; memo(c, '町の衛兵に任命された', 'info'); }
+      if (cands.length) { log(`${cands.map((c) => c.name).join('と')}が町の衛兵になった。`, 'event'); toast(`🛡️ ${cands.map((c) => c.name).join('と')}が衛兵になった`); }
+    } else {
+      for (const c of S.chars) if (c.job === 'guard') { c.job = c.isPlayer ? 'none' : (c.formerJob && c.formerJob !== 'guard' ? c.formerJob : 'none'); }
+      S.wanted.clear();
+    }
+  }
+  if (key === 'mayorOffice') {
+    if (value) S.electionDue = true;   // 村長を選ぶ（話し合いのなかで選挙をする）
+    else for (const c of S.chars) if (c.job === 'mayor') c.job = c.isPlayer ? 'none' : 'none';
+  }
+  if (key === 'jail' && !value) {
+    for (const c of S.chars) if (c.jailedUntil > S.t && !c.jailedAsWolf) { c.jailedUntil = S.t; if (c.isPlayer) toast('牢屋が使われなくなったので、外に出された。'); }
+  }
+  if ((key === 'theftBan' || key === 'violenceBan') && !value) S.wanted.clear();
+}
+
+// ---- 村長を決める（選挙の結果） ----
+export function setMayor(id) {
+  const old = mayor();
+  const w = id === 'player' ? S.player : byId(id);
+  if (!w) return;
+  if (old && old !== w) { old.job = old.isPlayer ? 'none' : (old.formerJob && old.formerJob !== 'mayor' ? old.formerJob : 'none'); memo(old, '選挙で村長の座を降りた', 'info'); }
+  if (old !== w) { if (!w.isPlayer && w.job !== 'mayor') w.formerJob = w.job; w.job = 'mayor'; }
+  const nm = w.isPlayer ? 'よそ者（あなた）' : w.name;
+  post('町役場', `【選挙】${nm}が新しい村長に選ばれました。`, { authorId: 'town' });
+  log(`${nm}が村長に選ばれた。`, 'event');
+  S.banner = { title: '🏛️ 新しい村長', text: `${nm}が村長に選ばれた。${w.isPlayer ? '役場で話し合いを開いたり、税金の使い道を決めたりできる。' : ''}`, until: performance.now() + 9000 };
+  for (const c of residents()) if (c.alive) memo(c, `${w.isPlayer ? 'よそ者' : w.name}が村長に選ばれた`, 'meeting');
+  if (w.isPlayer) toast('🏛️ あなたが村長になった！');
+}
+
+// ---- 町の人が自分たちで決まりを作ろうとする（無法の町で特に）。人気のない村長には選挙を求める ----
+function civic() {
+  if (Wolf.meetingActive() || day() < 2 || !chance(0.5)) return;
+  const r = S.rules;
+  const live = residents().filter((c) => c.alive && !isJailed(c));
+  const by = (fn) => live.slice().sort((a, b) => fn(b) - fn(a))[0];
+  const st = S.stats;
+  let rule = null, who = null;
+  if (!r.theftBan && st.thefts >= 2) { rule = { key: 'theftBan', value: true }; who = by((c) => c.p.honesty + (c.memory.some((m) => /盗まれ/.test(m)) ? 1 : 0)); }
+  else if (!r.violenceBan && st.fights >= 2) { rule = { key: 'violenceBan', value: true }; who = by((c) => c.p.honesty - c.p.aggression + (c.memory.some((m) => /殴られ/.test(m)) ? 1 : 0)); }
+  else if (!r.mayorOffice && day() >= 3) { rule = { key: 'mayorOffice', value: true }; who = by(ambition); }
+  else if ((r.theftBan || r.violenceBan) && !r.guardOffice && st.crimes >= 3) { rule = { key: 'guardOffice', value: true }; who = by((c) => c.p.honesty + c.p.aggression); }
+  else if (r.guardOffice && !r.jail && st.crimes >= 5) { rule = { key: 'jail', value: true }; who = by((c) => c.p.honesty); }
+  if (rule && who) {
+    post(who.name, `町に「${describe(rule).replace(/（.*）/, '')}」の決まりが必要だと思う。みんなで話し合いたい。`, { authorId: who.id });
+    Wolf.scheduleMeeting(who.id, 180, 'rule', rule);
+    return;
+  }
+  // 不信任：村長がみんなに嫌われていたら、選挙を求める声が上がる
+  const m = mayor();
+  if (m && r.mayorOffice) {
+    const avg = live.filter((c) => c !== m).reduce((a, c) => a + rel(c, m.id).like, 0) / Math.max(1, live.length - 1);
+    if (avg < -15) {
+      const rival = live.filter((c) => c !== m).sort((a, b) => ambition(b) - ambition(a))[0];
+      if (rival) {
+        post(rival.name, `今の村長${m.isPlayer ? '（よそ者）' : 'の' + m.name}にはついていけない。選挙でやり直そう。`, { authorId: rival.id });
+        log(`${rival.name}が村長の選び直しを呼びかけた（不信任）。`, 'event');
+        Wolf.scheduleMeeting(rival.id, 180, 'election');
+      }
+    }
+  }
+}
+
 // ---- 毎朝：税金・配給 ----
 export function daily() {
+  civic();
   const p = S.player;
   const tax = S.rules.tax;
   if (!mayorWorking()) {

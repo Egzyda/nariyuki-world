@@ -7,6 +7,7 @@ import { JOBS } from './data.js';
 import * as Dlg from './dialog.js';
 import * as Brain from './brain.js';
 import * as Sim from './sim.js';
+import * as Town from './town.js';
 
 const STANCES = ['peaceful', 'work', 'scheme', 'aggressive'];
 const DOS = ['meet', 'eat', 'drink', 'visit', 'gift', 'confront', 'avoid', 'work', 'rest', 'player'];
@@ -44,7 +45,8 @@ async function planBatch(group) {
     'できること(do)：meet=誰かに会って話す eat=食堂で食べる drink=酒場で飲む visit=どこかへ行く gift=誰かに施す confront=誰かに文句を言う・詰め寄る avoid=誰かを避ける work=働く rest=家で休む player=よそ者に話しかける\n' +
     '次のJSONだけを出力（説明は不要）：{"people":[{"name":"名前","stance":"peaceful|work|scheme|aggressive","thought":"今日の心の声(20字以内)","plans":[{"hour":8〜20の数字,"do":"上のどれか","who":"相手の名前またはnull","place":"場所またはnull","why":"理由(15字以内)"}]}]}\n' +
     '予定は1人2〜3個。仕事の時間も考えること。';
-  const msgs = [{ role: 'system', content: sys }, { role: 'user', content: `${day()}日目の朝。町の様子：${Brain.situationText()}\n住民：\n${group.map(brief).join('\n')}` }];
+  const may = Town.mayor();
+  const msgs = [{ role: 'system', content: sys }, { role: 'user', content: `${day()}日目の朝。町の様子：${Brain.situationText()}\n町の決まり：${Town.rulesText().join('／')}。村長：${may ? (may.isPlayer ? 'よそ者' : may.name) : 'いない'}${S.wolfKnown ? '。町は人狼におびえている' : ''}\n住民：\n${group.map(brief).join('\n')}` }];
   const j = parseJSON(await LLM.complete(msgs, { maxTokens: 120 * group.length, temperature: 0.9, tier: 'light' }));
   if (!j || !Array.isArray(j.people)) return;
   for (const x of j.people) {

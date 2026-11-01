@@ -2,11 +2,12 @@
 import { TILE, FACILITIES, BOARD_POS, JOBS, ITEMS, PLAZA, JOB_PERKS, MAP_H } from './data.js';
 import { LLM } from './llm.js';
 import { walkable, facAt, roofedFacAt } from './world.js';
-import { S, day, timeStr, rel, residents, distTiles, isJailed, clamp, toast, log, say } from './state.js';
+import { S, day, timeStr, rel, residents, distTiles, isJailed, clamp, toast, log, say, SETUP } from './state.js';
 import * as Sim from './sim.js';
 import * as Brain from './brain.js';
 import * as Dlg from './dialog.js';
 import * as Mind from './mind.js';
+import * as Seer from './seer.js';
 import * as Wolf from './wolf.js';
 import * as Town from './town.js';
 import { VERSION } from './version.js';
@@ -102,6 +103,21 @@ async function prepareAI() {
 }
 
 $('#start').onclick = async () => { await prepareAI(); startGame(); };
+
+// ---- 町の設定（法律・人狼の数）。前回の選択を覚えておく ----
+try { Object.assign(SETUP, JSON.parse(localStorage.getItem('nariyuki-setup') || '{}')); } catch {}
+const LAW_NOTE = { normal: '盗み・暴力は法律で禁止。村長・衛兵・牢屋がある。法律は話し合いで変えられる。', lawless: '法律も村長も衛兵もない町。住民（とあなた）が、法律の決め方から自分たちで作っていく。' };
+const WOLF_NOTE = { 0: '人狼はいない。でも言い伝えはあるので、町の人は疑い合うかもしれない。', 1: '人狼が1人まぎれている。', 2: '人狼が2人。仲間をかばい合う。', random: '0〜2人のどれか。何人いるかは最後までわからない。' };
+function renderSetup() {
+  document.querySelectorAll('#set-law [data-v]').forEach((b) => b.classList.toggle('on', b.dataset.v === SETUP.law));
+  document.querySelectorAll('#set-wolves [data-v]').forEach((b) => b.classList.toggle('on', b.dataset.v === SETUP.wolves));
+  $('#law-note').textContent = LAW_NOTE[SETUP.law];
+  $('#wolves-note').textContent = WOLF_NOTE[SETUP.wolves];
+  try { localStorage.setItem('nariyuki-setup', JSON.stringify(SETUP)); } catch {}
+}
+document.querySelectorAll('#set-law [data-v]').forEach((b) => b.onclick = () => { SETUP.law = b.dataset.v; renderSetup(); });
+document.querySelectorAll('#set-wolves [data-v]').forEach((b) => b.onclick = () => { SETUP.wolves = b.dataset.v; renderSetup(); });
+renderSetup();
 
 // 住民の考える力（AIの濃さ）
 const DENSITY_NOTE = {
@@ -236,7 +252,7 @@ $('#update-btn').onclick = async () => {
   btn.disabled = true; $('#update-note').textContent = '最新版を読み込み中…';
   // ブラウザに残っている古いファイルを、サーバーの最新版で置き換えてから再読み込み
   const files = ['./', 'index.html', 'css/style.css', 'version.json', 'manifest.webmanifest',
-    ...['main', 'sim', 'world', 'render', 'sprites', 'state', 'data', 'brain', 'dialog', 'llm', 'llm-worker', 'wolf', 'town', 'version', 'save', 'icons', 'mind'].map((f) => `js/${f}.js`)];
+    ...['main', 'sim', 'world', 'render', 'sprites', 'state', 'data', 'brain', 'dialog', 'llm', 'llm-worker', 'wolf', 'town', 'version', 'save', 'icons', 'mind', 'seer'].map((f) => `js/${f}.js`)];
   await Promise.all(files.map((f) => fetch(f, { cache: 'reload' }).catch(() => {})));
   location.reload();
 };
@@ -501,6 +517,7 @@ function openCharMenu(t) {
     if (['attack', 'steal', 'threaten'].includes(a.id) || a.danger) b.className = 'danger';
     b.onclick = () => {
       if (a.id === 'talk') { chatTarget = t; closeMenu(); openChat(t); return; }
+      if (a.id === 'fortune') { closeMenu(); openPicker(`${t.name}に誰を占ってもらう？（5G）`, (o) => Seer.askReading(o), (o) => o !== t); return; }
       closeMenu();
       Sim.doCharAction(t, a.id);
     };
@@ -685,14 +702,16 @@ $('#chat-text').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e
 $('#chat-close').onclick = closeChat;
 
 // ---------- 通報 ----------
-function openPicker() {
+// 住民を1人選ぶ（通報・占いなど）
+function openPicker(title = '誰を通報する？', onPick = (c) => Sim.reportResident(c), filter = () => true) {
   $('#picker').hidden = false;
+  $('#picker .chat-head span').textContent = title;
   const list = $('#picker-list');
   list.innerHTML = '';
-  for (const c of residents().filter((c) => c.alive && !isJailed(c))) {
+  for (const c of residents().filter((c) => c.alive && !isJailed(c) && filter(c))) {
     const b = document.createElement('button');
     b.textContent = `${c.name}（${JOBS[c.job].name}）`;
-    b.onclick = () => { closePicker(); Sim.reportResident(c); };
+    b.onclick = () => { closePicker(); onPick(c); };
     list.appendChild(b);
   }
 }
@@ -939,6 +958,8 @@ function renderStatus() {
     </div>
     <div class="box"><h4>🏛️ 町の決まり</h4>
       ${Town.rulesText().join('／')}<br>
+      <small>法律の決め方：${esc(Town.methodLabel())}／話し合いには${Town.quorum()}人以上の参加が必要</small><br>
+      村長：${Town.mayor() ? (Town.mayor().isPlayer ? 'あなた' : esc(Town.mayor().name)) : 'いない'}${Seer.seer() && S.seer?.announced ? `／占い師の${esc(Seer.seer().name)}は${Seer.credText()}` : ''}<br>
       町の金庫：${Math.floor(S.treasury)}G${S.bounty ? `　人狼の懸賞金：${S.bounty}G` : ''}
       ${S.taxDebt.player ? `<br><span class="wanted">税金の滞納：${S.taxDebt.player}G（役場で払える）</span>` : ''}
       ${Wolf.meetingActive() ? `<br>📣 ${Math.floor((S.meeting.at % 1440) / 60)}時から広場で話し合い${S.meeting.agenda.length ? `（議題：${S.meeting.agenda.map((a) => Town.describe(a.rule)).join('、')}）` : ''}` : ''}
@@ -1168,15 +1189,21 @@ function updateMeetingPanel() {
     $('#meeting-say').onclick = sayIt;
     $('#meeting-text').onkeydown = (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); sayIt(); } };
   };
-  if (m.state === 'talking' && m.ruleWait?.item.type === 'trialVote') {
+  if (m.state === 'talking' && m.ruleWait?.item.type === 'electionVote') {
+    const cands = m.ruleWait.item.cands;
+    ctrl.innerHTML = `<div class="sub2">村長に誰を選ぶ？（あなたの一票）</div>${sayRow}<div class="row votes">` +
+      cands.map((id) => `<button data-r="${id}">${id === 'player' ? '自分' : esc(S.chars.find((c) => c.id === id)?.name || '?')}</button>`).join('') + '<button data-r="abstain" class="ghost">棄権</button></div>';
+    bindSay();
+    ctrl.querySelectorAll('[data-r]').forEach((b) => b.onclick = () => Wolf.playerRuleVote(b.dataset.r));
+  } else if (m.state === 'talking' && m.ruleWait?.item.type === 'trialVote') {
     const tn = S.chars.find((c) => c.id === m.ruleWait.item.targetId)?.name || 'よそ者';
     ctrl.innerHTML = `<div class="sub2">${esc(tn)}をどうする？（意見を言ってから投票してもいい）</div>${sayRow}
-      <div class="row votes"><button data-r="jail">牢屋に1日</button><button data-r="fine">罰金5G</button><button data-r="forgive" class="ghost">許す</button><button data-r="abstain" class="ghost">棄権</button></div>`;
+      <div class="row votes">${S.rules.jail ? '<button data-r="jail">牢屋に1日</button>' : ''}<button data-r="fine">罰金5G</button><button data-r="forgive" class="ghost">許す</button><button data-r="abstain" class="ghost">棄権</button></div>`;
     bindSay();
     ctrl.querySelectorAll('[data-r]').forEach((b) => b.onclick = () => Wolf.playerRuleVote(b.dataset.r));
   } else if (m.state === 'talking' && m.ruleWait) {
     const d = Town.describe(m.ruleWait.item.rule);
-    ctrl.innerHTML = `<div class="sub2">「${esc(d)}」に、あなたは？（意見を言ってから投票してもいい）</div>${sayRow}
+    ctrl.innerHTML = `<div class="sub2">「${esc(d)}」に、あなたは？（決まるには${Town.ratioText(Town.threshold(m.ruleWait.item.rule))}の賛成と、${Town.quorum()}人以上の参加が必要）</div>${sayRow}
       <div class="row votes"><button data-r="yes">賛成</button><button data-r="no">反対</button><button data-r="abstain" class="ghost">棄権</button></div>`;
     bindSay();
     ctrl.querySelectorAll('[data-r]').forEach((b) => b.onclick = () => Wolf.playerRuleVote(b.dataset.r));
@@ -1233,6 +1260,12 @@ function updateToasts() {
 }
 
 // ---------- 結果 ----------
+function wolfReveal() {
+  const ws = Wolf.wolves();
+  if (!ws.length) return `🐺 この町に人狼は<b>いなかった</b>。${S.wolfKnown ? '町は、いない人狼におびえていた……' : ''}`;
+  return `🐺 人狼の正体は <b>${esc(ws.map((w) => w.name).join('と'))}</b>（${ws.length}人）でした。${S.wolf?.confirmed ? '町は人狼を突き止めた！' : '人狼は最後まで正体を隠し通した……'}（犠牲者 ${S.wolf?.kills.length || 0}人）`;
+}
+
 function showResult() {
   const p = S.player;
   const alive = residents().filter((c) => c.alive).length;
@@ -1246,7 +1279,10 @@ function showResult() {
   else if (st.crimes <= 10 && st.deaths === 0) verdict = '平和な町';
   else if (inf.ratio >= 0.5) verdict = inf.fear > inf.sup ? 'あなたが恐怖で支配する町' : 'あなたを慕う町';
   else verdict = 'ふつうの町';
-  if (S.wolf?.confirmed && p.alive) verdict = S.wolf.playerAccused.has(S.wolf.id) ? 'あなたが人狼を暴いた町' : '人狼を退けた町';
+  const ws = Wolf.wolves();
+  const wolfNames = ws.length ? ws.map((w) => w.name).join('と') : '';
+  if (!ws.length && S.wolfKnown && st.deaths === 0 && p.alive) verdict = 'いない人狼におびえた町';
+  if (ws.length && S.wolf?.confirmed && p.alive) verdict = ws.some((w) => S.wolf.playerAccused.has(w.id)) ? 'あなたが人狼を暴いた町' : '人狼を退けた町';
   else if (S.wolf && S.wolf.kills.length >= 4) verdict = '人狼に怯え続けた町';
   $('#result-box').innerHTML = `
     <h2>${p.alive ? `${day()}日目までの町の記録` : 'ゲームオーバー'}</h2>
@@ -1254,8 +1290,8 @@ function showResult() {
     <div class="big-title">「${verdict}」</div>
     <p>あなたの立場：<b>${Sim.titleFor(inf)}</b>（影響力 ${Math.round(inf.ratio * 100)}%）</p>
     ${p.alive && S.endedByChoice && !S.wolf?.confirmed
-      ? `<p class="wolf-reveal" id="wolf-hide">🐺 人狼はまだ見つかっていない（犠牲者 ${S.wolf?.kills.length || 0}人）<br><button id="wolf-show" class="ghost">正体を見る（ネタバレ）</button></p>`
-      : `<p class="wolf-reveal">🐺 人狼の正体は <b>${esc(Wolf.wolfChar()?.name || '?')}</b> でした。${S.wolf?.confirmed ? '町は人狼を突き止めた！' : '人狼は最後まで正体を隠し通した……'}（犠牲者 ${S.wolf?.kills.length || 0}人）</p>`}
+      ? `<p class="wolf-reveal" id="wolf-hide">🐺 人狼の謎はまだ解けていない（犠牲者 ${S.wolf?.kills.length || 0}人）<br><button id="wolf-show" class="ghost">正体を見る（ネタバレ）</button></p>`
+      : `<p class="wolf-reveal">${wolfReveal()}</p>`}
     <table>
       <tr><td>生き残った住民</td><td>${alive} / ${total}人</td></tr>
       <tr><td>事件の数</td><td>${st.crimes}件</td></tr>
@@ -1270,8 +1306,8 @@ function showResult() {
     <button class="big" id="again">新しい町で始める</button>`;
   $('#result').hidden = false;
   $('#again').onclick = () => { $('#result').hidden = true; S.gameOverReason = null; S.endedByChoice = false; startGame(); };
-  const ws = $('#wolf-show');
-  if (ws) ws.onclick = () => { $('#wolf-hide').innerHTML = `🐺 人狼の正体は <b>${esc(Wolf.wolfChar()?.name || '?')}</b>。（知ってしまった……）`; };
+  const wsb = $('#wolf-show');
+  if (wsb) wsb.onclick = () => { $('#wolf-hide').innerHTML = wolfReveal() + '（知ってしまった……）'; };
   const keep = $('#keep');
   if (keep) keep.onclick = () => { $('#result').hidden = true; S.over = false; S.endedByChoice = false; S.gameOverReason = null; setSpeed(1); };
 }

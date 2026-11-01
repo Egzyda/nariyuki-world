@@ -563,7 +563,7 @@ function drawChar(ctx, c, now) {
 // 作業中の小さな演出（火花・土・湯気・汗）
 function drawWorkFx(ctx, c, now) {
   const kind = c.activity === 'train' ? 'sweat' : c.activity === 'research' ? 'spark2' : c.activity === 'forage' ? 'dirt'
-    : { smith: 'spark', farmer: 'dirt', cook: 'steam', doctor: 'spark2', researcher: 'spark2', merchant: 'coin', guard: 'none' }[c.job] || 'sweat';
+    : { smith: 'spark', farmer: 'dirt', cook: 'steam', doctor: 'spark2', researcher: 'spark2', merchant: 'coin', guard: 'none', barkeep: 'steam', seer: 'spark2' }[c.job] || 'sweat';
   const col = { spark: '#ffb040', dirt: '#8a5a2a', steam: '#f0f0f0', sweat: '#80c8ff', spark2: '#c8a0ff', coin: '#ffe070' }[kind];
   if (!col) return;
   for (let i = 0; i < 3; i++) {

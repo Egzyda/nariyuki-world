@@ -43,6 +43,16 @@
       <label class="mode-card"><input type="radio" name="mode" value="none" checked>
         <span class="mc-icon">📜</span><span class="mc-body"><b>AIなし</b><small>すぐ遊べる。言葉の意味を読み取って返事する</small></span></label>
       <div id="gpu-note" class="note"></div>
+      <div class="modes-title" style="margin-top:12px">町の法律</div>
+      <div id="set-law" class="density">
+        <button data-v="normal">普通の町</button><button data-v="lawless">無法の町</button>
+      </div>
+      <div id="law-note" class="note"></div>
+      <div class="modes-title" style="margin-top:12px">人狼</div>
+      <div id="set-wolves" class="density">
+        <button data-v="0">いない</button><button data-v="1">1人</button><button data-v="2">2人</button><button data-v="random">？人</button>
+      </div>
+      <div id="wolves-note" class="note"></div>
       <div class="modes-title" style="margin-top:12px">住民の考える力（AIの濃さ）</div>
       <div id="density" class="density">
         <button data-d="low">控えめ</button><button data-d="normal">ふつう</button><button data-d="high">濃い</button>
@@ -180,8 +190,10 @@
       <p>自由に話しかけられる。誘う・頼む・渡す・売り買い・噂を吹き込む・恩を着せる・仲裁する・「〇〇で待ってて」など、意味を読み取って住民が動く。</p>
       <h4>🐺 人狼</h4>
       <p>夜中に誰かが襲われる。現場を調べる、住民に「昨日の夜どこにいた？」と聞く、髪の色を聞く、などで手がかりを集め、広場の話し合いで投票しよう。</p>
-      <h4>⚖️ 町のしくみ</h4>
-      <p>悪事は「どうするべき？」と相談でき、通報・処遇の話し合い（牢屋／罰金／許す）・様子見を選べる。役場の村長に頼むと町の決まり（税金・夜間外出禁止など）も変えられる。</p>
+      <h4>⚖️ 法律と村長</h4>
+      <p>盗み・暴力の禁止も「町の決まり」のひとつ。話し合いで変えられる（住民の半分以上が参加し、決まりの重さに応じて過半数／3分の2／4分の3の賛成が必要。決め方そのものも決まりで変えられる）。住民に「盗みを禁止しよう」「村長に立候補する」「選挙をしよう」と話すと動いてくれる。あなたも村長になれる。<br>「無法の町」では法律も村長も衛兵もなく、住民が決め方から自分たちで作っていく。</p>
+      <h4>🔮 占い師・酒場</h4>
+      <p>占い師のナギは人狼の気配を掲示板で知らせる（当たるとは限らない。当たれば信用が上がる）。5Gで誰かを占ってもらえる。酒場の主人カゲは噂の集まる場所。</p>
       <h4>💼 仕事</h4>
       <p>職場の住民に「雇ってください」。職業ごとに能力がある（衛兵は逮捕、医者は治療、料理人はまかない…）。状態タブで確認。</p>
       <h4>🧠 住民の頭脳</h4>

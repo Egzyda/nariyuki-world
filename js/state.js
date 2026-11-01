@@ -56,6 +56,9 @@ export function isAwake(c) {
 export function isJailed(c) { return c.jailedUntil > S.t; }
 
 // kind: crime(事件) gift(もらった) talk など。recent には時刻つきで残す
+// ゲーム開始時の町の設定（タイトル画面で選ぶ）。law: normal=普通の町 lawless=無法の町／wolves: '0' '1' '2' 'random'（人数は秘密）
+export const SETUP = { law: 'normal', wolves: '1' };
+
 export function memo(c, text, kind = 'info') {
   c.memory.push(`${day()}日目 ${text}`);
   if (c.memory.length > 12) c.memory.shift();

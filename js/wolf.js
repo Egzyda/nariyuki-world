@@ -12,15 +12,18 @@ import * as Sim from './sim.js';
 import { toneOf, firstPerson, placeName } from './dialog.js';
 import * as Town from './town.js';
 import { lookFor } from './sprites.js';
+import * as Seer from './seer.js';
 
 const LIFE = 60 * 24 * 60;    // 「ずっと」牢屋
 
 // ================= 準備 =================
-export function initWolf() {
-  const rs = residents();
-  const w = rs[Math.floor(S.rand() * rs.length)];
-  w.isWolf = true;
-  S.wolf = { id: w.id, kills: [], confirmed: false, lieLow: false, frame: null, playerThreat: 0, playerAccused: new Set() };
+export function initWolf(setup = { wolves: '1' }) {
+  // 人狼の数：0〜2人。「ランダム」のときは人数を秘密にする
+  const r = S.rand();
+  const n = setup.wolves === 'random' ? (r < 0.25 ? 0 : r < 0.75 ? 1 : 2) : Math.max(0, Math.min(2, Number(setup.wolves) || 0));
+  const pool = residents().slice().sort(() => S.rand() - 0.5);
+  const ids = pool.slice(0, n).map((c) => { c.isWolf = true; return c.id; });
+  S.wolf = { ids, id: ids[0] || null, hidden: setup.wolves === 'random', kills: [], confirmed: false, lieLow: false, frame: null, playerThreat: 0, playerAccused: new Set() };
   S.wolfKnown = false;
   S.meeting = null;
   S.lastMeetingEnd = -9999;
@@ -31,7 +34,10 @@ export function initWolf() {
   for (const c of S.chars) c.sus = {};
 }
 
-export const wolfChar = () => byId(S.wolf?.id);
+// 人狼たち（0〜2人）。wolfChar() は、まだ正体がばれていない人狼（いなければ最初の人狼）
+export const wolves = () => (S.wolf?.ids || (S.wolf?.id ? [S.wolf.id] : [])).map(byId).filter(Boolean);
+export const wolfChar = () => wolves().find((w) => w.alive && !w.wolfRevealed) || wolves()[0] || null;
+const allWolvesDone = () => wolves().every((w) => w.wolfRevealed || !w.alive);
 const dn = (c) => (c.isPlayer ? 'よそ者' : c.name);
 const pol = (c) => toneOf(c).pol;
 const nm = (c, t) => (t.isPlayer ? (pol(c) ? 'よそ者の方' : 'よそ者') : pol(c) ? `${t.name}さん` : t.name);
@@ -65,7 +71,7 @@ export function trust(c, fromId) {
   const like = rel(c, fromId).like;
   let t = clamp((like + 50) / 80, 0.3, 1.3);
   // 人狼を言い当てた実績があるよそ者の話は信じてもらいやすい
-  if (fromId === 'player' && S.wolf?.confirmed && S.wolf.playerAccused.has(S.wolf.id)) t += 0.3;
+  if (fromId === 'player' && wolves().some((w) => w.wolfRevealed && S.wolf.playerAccused.has(w.id))) t += 0.3;
   return t;
 }
 
@@ -104,6 +110,7 @@ export function onCrime(actor, witnesses) {
 // ================= 夜の狩り =================
 export function hourly(h) {
   if (!S.wolf) return;
+  if (h === 3) strangeNight();
   if (h === 1) startHunt();
   if (h === 21) for (const g of residents()) if (g.alive && g.job === 'guard') g.patrolNight = S.rules?.patrol || (S.wolfKnown && chance(0.6)) ? day() : -1;
   if (h === 0) revealIfJailed();
@@ -123,16 +130,19 @@ function chooseVictim(w) {
   if (!cands.length) return null;
   let best = null, bs = -1e9;
   for (const o of cands) {
-    const s = -rel(w, o).like + sus(o, w.id) * 1.5 + (o.home === w.home ? -40 : 0) + S.rand() * 40;
+    // 占い師は邪魔なので狙われやすい（自分を言い当てられていたらなおさら）
+    const seerBonus = o.job === 'seer' && S.seer?.announced ? 40 + (S.seer.named || []).filter((id) => byId(id)?.isWolf).length * 40 : 0;
+    const s = -rel(w, o).like + sus(o, w.id) * 1.5 + (o.home === w.home ? -40 : 0) + seerBonus + S.rand() * 40;
     if (s > bs) { bs = s; best = o; }
   }
   return best;
 }
 
 function startHunt() {
-  const w = wolfChar();
-  if (!w || !w.alive || isJailed(w) || w.hunt || day() < 2 || S.holdId === w.id) return;
-  if (day() === 2 && !S.wolf.omen) omen();
+  // 自由に動ける人狼のうち、ひとりが今夜の狩りに出る
+  const free = wolves().filter((x) => x.alive && !isJailed(x) && !x.hunt && S.holdId !== x.id);
+  const w = free.length ? free[Math.floor(S.rand() * free.length)] : null;
+  if (!w || day() < 2) return;
   const p = S.wolf.kills.length ? (S.wolf.lieLow ? 0.2 : 0.55) : day() === 2 ? 0.45 : 0.9;
   S.wolf.lieLow = false;
   if (!chance(p)) return;
@@ -156,7 +166,26 @@ function startHunt() {
   }
 }
 
-// 最初の夜：遠吠えの前触れ
+// ---- まぎらわしい夜：人狼がいてもいなくても起きる（本物か勘違いか、最初は区別できない） ----
+function strangeNight() {
+  const first = !S.wolf.omen;
+  if (!first && !chance(0.22)) return;
+  if (first) { if (day() < 2) return; omen(); return; }
+  const kind = pick(['howl', 'noise', 'farm']);
+  const ears = residents().filter((o) => o.alive && !isJailed(o)).sort(() => S.rand() - 0.5).slice(0, 2);
+  const text = { howl: '夜中に獣の遠吠えのような声を聞いた', noise: '夜中に外で何かが動く物音を聞いた', farm: '朝、畑の作物が何かに荒らされていた' }[kind];
+  for (const o of ears) memo(o, text, 'night');
+  if (kind === 'farm') post('町役場', '畑の作物が何者かに荒らされていました。野良犬でしょうか……？', { authorId: 'town' });
+  log(`🌙 ${text.replace(/^夜中に|^朝、/, '')}（${ears.map((o) => o.name).join('・')}）`, 'info');
+  // 疑い深い人は、夜に起きていた人や嫌いな人を疑いはじめる
+  if (S.wolfKnown) for (const o of ears) {
+    if (o.p.aggression + (1 - o.p.honesty) < 0.8) continue;
+    const t = residents().filter((x) => x !== o && x.alive && !isJailed(x)).sort((a, b) => rel(o, a).like - rel(o, b).like)[0];
+    if (t) addSus(o, t.id, 15, `${text.replace(/を聞いた|ていた$/, '')}ときに、なんとなく${t.name}の顔が浮かんだ`);
+  }
+}
+
+// 最初の夜：遠吠えの前触れ（人狼がいなくても聞こえる）
 function omen() {
   S.wolf.omen = true;
   const p = S.player;
@@ -290,7 +319,7 @@ function discoverBody(v, finder) {
   S.wolfKnown = true;
   const [vx, vy] = tilePos(v);
   const f = facAt(vx, vy);
-  const w = wolfChar();
+  const w = byId(v.killedBy) || wolfChar();
   if (finder) {
     if (finder.isPlayer) toast(`☠ ${v.name}が倒れている……！`);
     else say(finder, `${pick(['きゃああ！', 'う、うそだろ……！', 'ひっ……！'])} ${v.name}が……！`, 6);
@@ -303,6 +332,7 @@ function discoverBody(v, finder) {
     ? { title: '☠ この町に人狼がいる……！', text: `${v.name}が${f ? f.name : '町'}で無残な姿で見つかった。住民の誰かが人狼かもしれない。現場を調べたり（建物の中でF）、聞き込みをしたり、話し合いを呼びかけて人狼を突き止めよう。`, until: performance.now() + 11000 }
     : { title: `☠ また犠牲者が……`, text: `${v.name}が襲われた。人狼はまだ町の中にいる。`, until: performance.now() + 8000 };
   addNote(`${v.name}が${f ? f.name : '町'}で死んでいるのが見つかった（${S.wolf.kills.length}人目）`);
+  Seer.onInnocent(v);
   for (const o of residents()) {
     if (!o.alive) continue;
     memo(o, `${v.name}が人狼に殺された`, 'crime');
@@ -319,7 +349,7 @@ function discoverBody(v, finder) {
   // 牢屋に閉じ込めていた人は無実だった
   for (const o of residents()) {
     if (o.jailedAsWolf && !o.isWolf) {
-      o.jailedAsWolf = false; o.jailedUntil = S.t;
+      o.jailedAsWolf = false; o.jailedUntil = S.t; Seer.onInnocent(o);
       for (const x of residents()) if (x.sus?.[o.id]) x.sus[o.id].v = 0;
       post('町役場', `牢屋に閉じ込められていた${o.name}さんは人狼ではありませんでした。釈放されます。`, { authorId: 'town' });
       log(`牢屋にいたのに事件が起きた。${o.name}は無実だった……`, 'event');
@@ -363,7 +393,7 @@ export function investigate(fid) {
 
 // 家の中を調べる（人狼の家なら血のついた服が見つかる）
 export function searchHouse(fid) {
-  const w = wolfChar();
+  const w = wolves().find((x) => x.home === fid);
   if (w && w.home === fid && S.wolf.kills.length && !S.evidence.some((e) => e.kind === 'cloth')) {
     S.evidence.push({ kind: 'cloth', home: fid, label: `血のついた服（${FAC[fid].name}で発見）` });
     addNote(`${FAC[fid].name}の物入れの奥に、血のついた服が隠してあった！ この家の誰かが……`);
@@ -381,8 +411,8 @@ export function adjustDamage(a, b, dmg) {
 
 // 正体がばれた人狼は、夜に牢屋を破ることがある
 function tryJailbreak() {
-  const w = wolfChar();
-  if (!w || !w.alive || !S.wolf.confirmed || !isJailed(w)) return;
+  const w = wolves().find((x) => x.alive && x.wolfRevealed && isJailed(x));
+  if (!w) return;
   if (!chance(S.rules?.patrol ? 0.06 : 0.2)) return;
   w.jailedUntil = S.t; w.jailedAsWolf = false;
   S.wanted.add(w.id);
@@ -393,18 +423,18 @@ function tryJailbreak() {
 }
 
 function revealIfJailed() {
-  const w = wolfChar();
-  if (!w || S.wolf.confirmed || !w.alive) return;
-  if (isJailed(w) && w.jailedAsWolf) reveal('jail');
+  for (const w of wolves()) if (w.alive && !w.wolfRevealed && isJailed(w) && w.jailedAsWolf) reveal('jail', w);
 }
 
-export function reveal(how) {
-  const w = wolfChar();
-  if (!w || S.wolf.confirmed) return;
-  S.wolf.confirmed = true;
+export function reveal(how, w = wolfChar()) {
+  if (!w || w.wolfRevealed) return;
+  w.wolfRevealed = true;
+  S.wolf.confirmed = allWolvesDone();
+  Seer.onReveal(w);
   const text = how === 'jail' ? `真夜中、牢屋から獣の遠吠えが響いた。牢の中の${w.name}は、毛むくじゃらの獣の姿に変わっていた……！`
     : `倒れた${w.name}の体が、みるみる獣の姿に変わっていった……！`;
-  S.banner = { title: `🐺 ${w.name}の正体は人狼だった！`, text: text + ' 町に平和が戻りそうだ。', until: performance.now() + 12000 };
+  const more = !S.wolf.confirmed || S.wolf.hidden;
+  S.banner = { title: `🐺 ${w.name}の正体は人狼だった！`, text: text + (more ? ' ……でも、人狼はひとりとは限らない。' : ' 町に平和が戻りそうだ。'), until: performance.now() + 12000 };
   post('町役場', `【号外】${w.name}の正体は人狼でした。${text}`, { authorId: 'town' });
   log(`${w.name}の正体は人狼だった！`, 'event');
   addNote(`${w.name}の正体は人狼だった！`);
@@ -478,6 +508,12 @@ const RING = [[24, 16], [25, 16], [26, 16], [27, 16], [23, 17], [28, 17], [23, 1
 
 export function meetingActive() { return S.meeting && S.meeting.state !== 'done'; }
 
+// 選挙で、o が候補 id をどれだけ推すか（好感度・信頼・町をまとめる力）
+function score(o, id) {
+  const t = id === 'player' ? S.player : byId(id);
+  return rel(o, id).like + trust(o, id) * 20 + (t.isPlayer ? 0 : Town.ambition(t) * 15) + (t.job === 'mayor' ? 5 : 0) + S.rand() * 10;
+}
+
 // よそ者の側につくと約束した住民（投票をよそ者に合わせる）
 const isAlly = (o) => o.ally && S.t < o.ally.until;
 
@@ -532,6 +568,7 @@ export function scheduleMeeting(orgId, delayMin, reason, rule = null, trial = nu
   S.meeting = { at, org: orgId, reason, state: 'planned', present: [], queue: [], log: [], nextReal: 0, playerIn: false, votes: null, result: null, agenda: [], trials: [] };
   if (rule) S.meeting.agenda.push({ rule, proposer: orgId });
   if (trial) addTrial(S.meeting, trial);
+  if (reason === 'election') S.electionDue = true;
   // 人狼の事件のあと、村長は夜間外出禁止を議題にする
   const may = Town.mayor();
   if (reason === 'death' && may && !S.rules.curfew) S.meeting.agenda.push({ rule: { key: 'curfew', value: true }, proposer: may.id });
@@ -539,7 +576,7 @@ export function scheduleMeeting(orgId, delayMin, reason, rule = null, trial = nu
   const hh = Math.floor((at % 1440) / 60);
   const dayWord = Math.floor(at / 1440) + 1 === day() ? '今日' : '明日';
   const why = (reason === 'death' ? '人狼のことを話し合いたい。' : reason === 'suspect' ? '人狼が誰なのか、みんなで話し合おう。'
-    : trial ? `${byId(trial.targetId)?.name || 'よそ者'}のしたことについて、どうするかみんなで決めたい。` : '話し合いたいことがある。')
+    : trial ? `${byId(trial.targetId)?.name || 'よそ者'}のしたことについて、どうするかみんなで決めたい。` : reason === 'election' ? '村長を選ぶ選挙をしたい。' : '話し合いたいことがある。')
     + (S.meeting.agenda.length ? `議題：${S.meeting.agenda.map((a) => Town.describe(a.rule)).join('、')}` : '');
   post(org.isPlayer ? 'あなた' : org.name, `【呼びかけ】${dayWord}${hh}時、広場の噴水の前に集まってほしい。${why}`, { authorId: orgId });
   log(`${dn(org)}が${dayWord}${hh}時に広場での話し合いを呼びかけた。`, 'event');
@@ -592,7 +629,7 @@ function meetingTick() {
     m.ruleWait = null;
   }
   if (m.state === 'talking' && m.playerIn && performance.now() >= m.nextReal) {
-    if (['ruleVote', 'trialVote'].includes(m.queue[0]?.type) && !m.queue[0].playerVote) {
+    if (['ruleVote', 'trialVote', 'electionVote'].includes(m.queue[0]?.type) && !m.queue[0].playerVote) {
       m.ruleWait = { item: m.queue[0], deadline: performance.now() + 25000 };
       return;
     }
@@ -634,7 +671,10 @@ function buildQueue(m, present) {
   const opener = list[0];
   const victims = S.wolf.kills.map((k) => byId(k.id)?.name).filter(Boolean);
   m.queue.push({ type: 'open', c: opener, victims });
+  // 法律の決め方がまだない町では、ほかの決まりより先に「決め方」を決める
+  if (!S.rules.method && m.agenda.length && !m.agenda.some((a) => a.rule.key === 'method')) m.agenda.unshift({ rule: { key: 'method', value: 'standard' }, proposer: m.agenda[0].proposer });
   for (const a of m.agenda) m.queue.push({ type: 'rule', rule: a.rule, proposer: a.proposer, c: byId(a.proposer) && list.includes(byId(a.proposer)) ? byId(a.proposer) : opener });
+  if (S.electionDue && S.rules.mayorOffice) m.queue.push({ type: 'election', c: opener });
   for (const tr of m.trials || []) m.queue.push({ type: 'trial', targetId: tr.targetId, proposer: tr.proposer, c: byId(tr.proposer) && list.includes(byId(tr.proposer)) ? byId(tr.proposer) : opener });
   if (!S.wolfKnown) return;
   const order = list.slice(1).sort(() => S.rand() - 0.5);
@@ -692,6 +732,42 @@ function speakNext(m) {
     text = item.proposer === 'player' ? `よそ者から「${d}」という提案があった。みんな、どう思う？`
       : pol(c) ? `ひとつ提案があります。「${d}」にしたいと思います。賛成か反対か、聞かせてください。` : `提案がある。「${d}」にしたいと思う。賛成か反対か、聞かせてくれ。`;
     m.queue.unshift({ type: 'ruleVote', rule: item.rule, proposer: item.proposer, c });
+  } else if (item.type === 'election') {
+    // 村長の選挙：今の村長・立候補したあなた・町をまとめたい住民が候補
+    const present = presentChars(m);
+    const may = Town.mayor();
+    const cands = [];
+    if (may && (may.isPlayer ? m.playerIn : present.includes(may))) cands.push(may.id);
+    if (S.playerCandidate && m.playerIn && !cands.includes('player')) cands.push('player');
+    for (const o of present.filter((o) => !cands.includes(o.id)).sort((a, b) => Town.ambition(b) - Town.ambition(a))) {
+      if (cands.length >= 3) break;
+      if (Town.ambition(o) >= 0.55 || cands.length < 2) cands.push(o.id);
+    }
+    const names = cands.map((id) => (id === 'player' ? 'よそ者' : byId(id).name));
+    text = pol(c) ? `村長を選ぶ選挙をします。立候補は${names.join('、')}です。` : `村長の選挙をやるぞ。立候補は${names.join('、')}だ。`;
+    for (const id of cands) { const o = id === 'player' ? null : byId(id); if (o && o !== c) m.queue.unshift({ type: 'react', c: o, text: pol(o) ? 'この町のために、精一杯つとめます。' : '俺に任せてくれれば、町をよくしてみせる。' }); }
+    m.queue.push({ type: 'electionVote', cands, c });
+  } else if (item.type === 'electionVote') {
+    const cands = item.cands;
+    const tally = Object.fromEntries(cands.map((id) => [id, []]));
+    for (const id of m.present) {
+      const o = byId(id);
+      if (!o || !o.alive) continue;
+      let pickId;
+      if (cands.includes(o.id)) pickId = o.id;
+      else if (isAlly(o) && m.playerIn && tally[item.playerVote]) pickId = item.playerVote;
+      else pickId = cands.slice().sort((a, b) => score(o, b) - score(o, a))[0];
+      tally[pickId].push(o.name);
+    }
+    if (m.playerIn && tally[item.playerVote]) tally[item.playerVote].push('あなた');
+    m.log.push({ who: '', text: cands.map((id) => `${id === 'player' ? 'よそ者' : byId(id).name}：${tally[id].length}票`).join('／'), cls: 'vote' });
+    const enough = m.present.length + (m.playerIn ? 1 : 0) >= Town.quorum();
+    const best = cands.slice().sort((a, b) => tally[b].length - tally[a].length)[0];
+    if (!enough) text = `参加者が住民の半分に足りず、選挙は成立しなかった。`;
+    else { Town.setMayor(best); text = `${tally[best].length}票で、${best === 'player' ? 'よそ者（あなた）' : byId(best).name}が村長に選ばれた！`; }
+    S.electionDue = false; S.playerCandidate = false;
+    m.log.push({ who: '', text, cls: 'result' });
+    return text;
   } else if (item.type === 'trial') {
     const t = byId(item.targetId) || S.player;
     const crimes = knownCrimes(t);
@@ -735,7 +811,7 @@ function speakNext(m) {
       const sev = saw ? 1 : heard ? 0.7 : 0.35;
       const like = rel(o, t.isPlayer ? 'player' : t.id).like;
       const anger = sev * (0.45 + o.p.honesty * 0.45) + o.p.aggression * 0.2 - like / 140 - (t.trialHonest ? 0.15 : 0) + (m.trialShift || 0) * trust(o, 'player');
-      tally[anger > 0.72 ? 'jail' : anger > 0.4 ? 'fine' : 'forgive'].push(o.name);
+      tally[anger > 0.72 && S.rules.jail ? 'jail' : anger > 0.4 ? 'fine' : 'forgive'].push(o.name);
     }
     const pv = item.playerVote;
     if (m.playerIn && tally[pv]) tally[pv].push('あなた');
@@ -743,7 +819,8 @@ function speakNext(m) {
     m.log.push({ who: '', text: `牢屋：${tally.jail.join('、') || 'なし'}／罰金：${tally.fine.join('、') || 'なし'}／許す：${tally.forgive.join('、') || 'なし'}`, cls: 'vote' });
     // 罰したい人（牢屋＋罰金）が許す人より多ければ罰する。牢屋と罰金が同数なら軽い罰金
     const punish = tally.jail.length + tally.fine.length;
-    const best = punish > tally.forgive.length ? (tally.jail.length > tally.fine.length ? 'jail' : 'fine') : 'forgive';
+    let best = punish > tally.forgive.length ? (tally.jail.length > tally.fine.length ? 'jail' : 'fine') : 'forgive';
+    if (best === 'jail' && !S.rules.jail) best = 'fine';   // 牢屋を使わない町では罰金にする
     const tn = dn(t);
     if (best === 'jail') { Sim.jail(t, 24 * 60); S.wanted.delete(t.id); text = `${tally.jail.length}票で、${tn}を牢屋に1日入れることになった。`; }
     else if (best === 'fine') { const n = Math.min(5, Math.floor(t.coins)); t.coins -= n; S.treasury += n; text = `${tally.fine.length}票で、${tn}は罰金${n}Gを町の金庫に払うことになった。`; }
@@ -772,11 +849,17 @@ function speakNext(m) {
     if (m.playerIn && pv === 'no') no.push('あなた');
     m.ruleShift = 0;
     const d = Town.describe(item.rule);
-    m.log.push({ who: '', text: `賛成：${yes.join('、') || 'なし'}／反対：${no.join('、') || 'なし'}`, cls: 'vote' });
-    if (yes.length > no.length) {
+    const need = Town.threshold(item.rule);
+    const voters = yes.length + no.length;
+    const ratio = voters ? yes.length / voters : 0;
+    const enough = m.present.length + (m.playerIn ? 1 : 0) >= Town.quorum();   // あなたも参加者に数える
+    m.log.push({ who: '', text: `賛成：${yes.join('、') || 'なし'}／反対：${no.join('、') || 'なし'}（必要：${Town.ratioText(need)}の賛成・参加${Town.quorum()}人以上）`, cls: 'vote' });
+    if (!enough) text = `参加者が${m.present.length + (m.playerIn ? 1 : 0)}人で、住民の半分（${Town.quorum()}人）に足りない。「${d}」は決められなかった。`;
+    else if (need <= 0.5 ? ratio > 0.5 : ratio >= need - 1e-9) {
       Town.applyRule(item.rule);
-      text = `賛成${yes.length}・反対${no.length}で、「${d}」に決まった。`;
-    } else text = `賛成${yes.length}・反対${no.length}で、「${d}」は見送りになった。`;
+      text = `賛成${yes.length}・反対${no.length}（${Math.round(ratio * 100)}%）で、「${d}」に決まった。`;
+      if (item.rule.key === 'mayorOffice' && item.rule.value) m.queue.unshift({ type: 'election', c: presentChars(m)[0] });
+    } else text = `賛成${yes.length}・反対${no.length}（${Math.round(ratio * 100)}%）。${Town.ratioText(need)}に届かず、「${d}」は見送りになった。`;
     m.log.push({ who: '', text, cls: 'result' });
     m.agenda = m.agenda.filter((a) => a.rule.key !== item.rule.key);
     return text;
@@ -860,7 +943,7 @@ export function playerSpeak(text) {
   void agree; void total;
 }
 
-const keepRuleItems = (q) => q.filter((i) => i.type === 'rule' || i.type === 'ruleVote' || i.type.startsWith('trial'));
+const keepRuleItems = (q) => q.filter((i) => i.type === 'rule' || i.type === 'ruleVote' || i.type.startsWith('trial') || i.type.startsWith('election'));
 
 // 決まりの採決でのプレイヤーの一票
 export function playerRuleVote(v) {
@@ -868,7 +951,8 @@ export function playerRuleVote(v) {
   if (!m?.ruleWait) return;
   m.ruleWait.item.playerVote = v;
   const VTEXT = { yes: '賛成！', no: '反対だ！', jail: '牢屋に入れるべきだ。', fine: '罰金でいいと思う。', forgive: '今回は許してあげよう。' };
-  m.log.push({ who: 'あなた', text: VTEXT[v] || '（棄権）', cls: 'me' });
+  const cand = v === 'player' ? '自分に一票！' : byId(v) ? `${byId(v).name}に一票。` : null;
+  m.log.push({ who: 'あなた', text: VTEXT[v] || cand || '（棄権）', cls: 'me' });
   m.ruleWait = null;
   m.nextReal = performance.now() + 500;
 }
@@ -902,7 +986,7 @@ export function vote(playerChoice) {
     if (c.isWolf) {
       // 人狼は、すでに疑われている誰かに乗る
       const lead = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
-      choice = lead && lead[0] !== c.id ? lead[0] : S.wolf.frame;
+      choice = lead && lead[0] !== c.id && !byId(lead[0])?.isWolf ? lead[0] : S.wolf.frame;
     } else {
       const top = topSuspect(c);
       if (top && top.v >= 40) choice = top.t.id;
