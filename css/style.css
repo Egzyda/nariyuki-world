@@ -232,3 +232,98 @@ h1 { font-size: 44px; margin: 0; letter-spacing: 4px; color: #ffe9a0; text-shado
 #continue button:hover { background: rgba(90,140,200,.32); }
 #continue button small { color: #9ab; margin-left: 8px; }
 #speed #save-btn, #speed #title-btn { flex: 0 0 40px; background: #2c3824; }
+
+/* ======== スマホ・タッチ ======== */
+#touch, #mtabs, .touch-only { display: none; }
+body.touch .touch-only { display: block; }
+body.touch .pc-only { display: none; }
+button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+#cv { touch-action: none; -webkit-user-select: none; user-select: none; }
+
+/* 操作ボタン（タッチ端末のみ） */
+body.touch #touch { display: block; position: absolute; inset: 0; pointer-events: none; }
+#joy { position: absolute; left: 0; top: 0; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%;
+  background: rgba(255,255,255,.07); border: 2px solid rgba(255,255,255,.22); opacity: .55; transition: opacity .15s; }
+#joy.on { opacity: 1; transition: none; }
+#joy-knob { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%;
+  background: rgba(255,233,160,.55); border: 2px solid rgba(255,233,160,.9); }
+#joy.run #joy-knob { background: rgba(255,150,90,.7); border-color: #ffb070; }
+#act { position: absolute; right: 18px; bottom: 26px; width: 84px; height: 84px; border-radius: 50%; pointer-events: auto;
+  background: rgba(200,144,42,.85); border: 3px solid #ffe9a0; box-shadow: 0 4px 0 #6a3a10, 0 0 16px rgba(0,0,0,.4);
+  color: #fff; font-weight: bold; font-size: 15px; padding: 0; line-height: 1.2; }
+#act:active { transform: translateY(3px); box-shadow: 0 1px 0 #6a3a10; }
+#act.idle { background: rgba(60,70,50,.75); border-color: rgba(255,255,255,.35); color: #ccc; font-size: 13px; }
+body.touch.menu-open #touch, body.touch.meeting-open #touch { display: none; }
+body.touch #callout { pointer-events: auto; cursor: pointer; }
+
+/* 画面が狭いとき：縦並び＋下のタブ */
+body.mobile #game { flex-direction: column; }
+body.mobile #stage { flex: 1 1 auto; min-height: 0; }
+body.mobile #side { width: 100% !important; flex: 0 0 auto; border-left: none; border-top: 1px solid #3a4a30; padding-bottom: env(safe-area-inset-bottom); }
+body.mobile #panels { display: none; }
+body.mobile.sheet #panels { display: flex; flex-direction: column; flex: 0 0 46dvh; height: 46dvh; padding: 4px; }
+body.mobile .pcol { display: contents; }
+body.mobile .panel { display: none; }
+body.mobile .panel.active { display: flex; flex: 1 1 auto; max-height: none; }
+body.mobile .panel h3 { font-size: 14px; padding: 8px 12px; cursor: pointer; }
+body.mobile .panel h3 small { display: none; }
+body.mobile .panel h3::after { content: '✕ 閉じる'; float: right; font-size: 12px; color: #9a9; font-weight: normal; }
+body.mobile .panel .pbody { font-size: 14px; }
+body.mobile #speed { padding: 4px 6px; gap: 4px; flex-wrap: nowrap; }
+body.mobile #speed button { flex: 1 1 0; padding: 7px 0; min-width: 0; }
+body.mobile #speed #save-btn, body.mobile #speed #title-btn, body.mobile #speed #map-btn { flex: 1 1 0; }
+body.mobile #speed .keyhelp { display: none; }
+body.mobile #mtabs { display: flex; border-top: 1px solid #3a4a30; }
+#mtabs button { flex: 1; border-radius: 0; background: #1c2216; padding: 6px 0 7px; font-size: 18px; display: flex; flex-direction: column; align-items: center; gap: 1px; position: relative; color: #ccc; }
+#mtabs button span { font-size: 10px; }
+#mtabs button.on { background: #3a4a30; color: #ffe9a0; }
+#mtabs .dot { position: absolute; top: 4px; right: 22%; width: 8px; height: 8px; border-radius: 50%; background: #ff6a5a; }
+
+body.mobile #hud { left: 6px; top: 6px; font-size: 12px; padding: 4px 8px; max-width: calc(100% - 12px); line-height: 1.5; }
+body.mobile.minimap #hud { max-width: calc(100% - 210px); }
+body.mobile #toasts { top: 52px; width: 94%; }
+body.mobile .toast { font-size: 12px; padding: 6px 10px; text-align: center; }
+body.mobile #nearcard { left: 6px; top: auto; bottom: 150px; width: min(200px, 45%); font-size: 11px; padding: 6px 8px; line-height: 1.5; }
+body.mobile #nearcard b { font-size: 13px; }
+body.mobile #hint { bottom: 120px; font-size: 12px; max-width: 94%; white-space: normal; text-align: center; }
+body.touch #hint { bottom: 122px; }
+body.mobile #callout { bottom: 150px; max-width: 92%; font-size: 13px; }
+body.touch #nearcard { bottom: 158px; }
+body.touch #callout { bottom: 122px; }
+body.touch.callout-on #hint { display: none; }
+body.mobile #busy { top: 45%; }
+body.mobile #banner { top: 16%; width: 92%; padding: 10px 12px; }
+body.mobile #banner b { font-size: 18px; }
+
+body.mobile #menu { left: 6px; right: 6px; bottom: 6px; min-width: 0; max-height: 72%; overflow-y: auto; padding: 8px 10px 10px; }
+body.mobile #menu button { padding: 11px 12px; margin: 5px 0; font-size: 15px; }
+body.mobile #menu .k { display: none; }
+#menu .mclose { display: none; }
+body.mobile #menu .mclose { display: block; text-align: center !important; background: #1c2216 !important; color: #aaa; }
+
+body.mobile #meeting { left: 4px; right: 4px; top: 4px; bottom: 4px; width: auto; }
+body.mobile #meeting-ctrl input, body.mobile .chat-input input, body.mobile .post-form textarea { font-size: 16px; }
+
+/* 会話（スマホ：全画面） */
+body.mobile .modal { align-items: stretch; }
+body.mobile .chat-box { width: 100%; height: 100%; border-radius: 0; border: none; display: flex; flex-direction: column; padding-bottom: env(safe-area-inset-bottom); }
+body.mobile .chat-head { padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top)); }
+body.mobile .chat-head button { padding: 8px 14px; }
+body.mobile #chat-log { flex: 1 1 auto; height: auto; min-height: 80px; }
+body.mobile #chat-chips { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+body.mobile #chat-chips button { flex: 0 0 auto; font-size: 13px; padding: 6px 12px; }
+body.mobile #chat-trade { flex-wrap: nowrap; overflow-x: auto; }
+body.mobile #chat-trade button { flex: 0 0 auto; padding: 6px 10px; }
+body.mobile .chat-input button { padding: 8px 16px; }
+body.mobile .msg { font-size: 15px; max-width: 86%; }
+body.mobile #picker-list { max-height: none; flex: 1; }
+
+/* タイトル（スマホ） */
+body.mobile .title-wrap { left: 50%; top: 0; transform: translateX(-50%); width: 100%; max-width: 520px; max-height: none; height: 100%; padding: 22px 18px calc(18px + env(safe-area-inset-bottom)); animation: none; }
+body.mobile .title-shade { background: linear-gradient(180deg, rgba(6,10,6,.55) 0%, rgba(6,10,6,.86) 40%, rgba(6,10,6,.94) 100%); }
+body.mobile .title-wrap h1 { font-size: 42px; }
+body.mobile .title-wrap .desc { font-size: 13px; line-height: 1.7; }
+body.mobile .mode-card:hover { transform: none; }
+body.mobile #result-box { margin: 12px; padding: 20px 14px; }
+body.mobile #result-box table { font-size: 13px; }
+body.mobile.menu-open #nearcard { display: none; }

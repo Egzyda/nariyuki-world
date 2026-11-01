@@ -2,7 +2,10 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#14180f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <title>ナリユキワールド</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
@@ -41,7 +44,8 @@
       <div class="bar"><div id="load-bar"></div></div>
       <div id="load-text">準備中…</div>
     </div>
-    <div class="keys">移動 WASD・矢印（Shiftで走る）／話す・調べる F／停止⇔×1 スペース／掲示板 B／地図 M</div>
+    <div class="keys touch-only">移動 画面をなぞる（大きく倒すと走る）／話す・調べる 右下の丸ボタン／拡大 2本指</div>
+    <div class="keys pc-only">移動 WASD・矢印（Shiftで走る）／話す・調べる F／停止⇔×1 スペース／掲示板 B／地図 M</div>
     <div class="title-foot">
       <span id="ver"></span>
       <span id="update-note"></span>
@@ -62,6 +66,10 @@
     <div id="nearcard" hidden></div>
     <div id="banner" hidden></div>
     <div id="callout" hidden></div>
+    <div id="touch">
+      <div id="joy"><div id="joy-knob"></div></div>
+      <button id="act"><span id="act-label">調べる</span></button>
+    </div>
     <div id="meeting" hidden>
       <div id="meeting-head"></div>
       <div id="meeting-log"></div>
@@ -94,10 +102,19 @@
       <button data-speed="1" class="on">×1</button>
       <button data-speed="2">×2</button>
       <button data-speed="4">×4</button>
+      <button id="map-btn" title="地図（M）">🗺</button>
       <button id="save-btn" title="セーブ">💾</button>
       <button id="title-btn" title="タイトルへ戻る">🏠</button>
       <span class="keyhelp">移動 WASD ／ 走る Shift ／ 話す・調べる F ／ 停止⇔×1 Space ／ 地図 M ／ 拡大 ホイール</span>
     </div>
+    <nav id="mtabs">
+      <button data-tab="status">🧍<span>状態</span></button>
+      <button data-tab="items">🎒<span>持ち物</span></button>
+      <button data-tab="notes">📓<span>手帳</span></button>
+      <button data-tab="people">👥<span>住民</span></button>
+      <button data-tab="board">📋<span>掲示板</span><i class="dot" hidden></i></button>
+      <button data-tab="log">📜<span>記録</span></button>
+    </nav>
   </aside>
 </div>
 

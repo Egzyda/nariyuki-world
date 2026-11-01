@@ -23,9 +23,22 @@ let expanded = null;
 
 const PLAYER_SPEED = 230;   // px/秒（Shiftで1.6倍）
 
+// ---------- スマホ判定 ----------
+// touch: 指で操作する端末（スティックとボタンを出す）／mobile: 画面が狭い（縦並びのレイアウトにする）
+const isTouch = () => matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0 && !matchMedia('(pointer: fine)').matches;
+const isMobile = () => innerWidth < 820 || (isTouch() && Math.min(innerWidth, innerHeight) < 600);
+function applyLayout() {
+  document.body.classList.toggle('touch', isTouch());
+  document.body.classList.toggle('mobile', isMobile());
+}
+applyLayout();
+
 // ---------- タイトル ----------
 (async function setupTitle() {
-  if (!LLM.hasWebGPU()) {
+  if (isMobile() && isTouch()) {
+    document.querySelectorAll('.webgpu').forEach((l) => { l.classList.add('disabled'); l.querySelector('input').disabled = true; });
+    $('#gpu-note').textContent = 'ブラウザ内AIはスマホでは重すぎるため使えません。クラウドAIかAIなしで遊べます。';
+  } else if (!LLM.hasWebGPU()) {
     document.querySelectorAll('.webgpu').forEach((l) => { l.classList.add('disabled'); l.querySelector('input').disabled = true; });
     $('#gpu-note').textContent = 'このブラウザはWebGPUに対応していないため、ブラウザ内AIは使えません（PC版Chrome推奨）。';
   } else {
@@ -37,7 +50,7 @@ const PLAYER_SPEED = 230;   // px/秒（Shiftで1.6倍）
   else {
     $('.api').classList.add('disabled'); apiInput.disabled = true;
     $('#api-note').textContent = '（未設定：Cloudflare Pages に Workers AI を追加すると使えます。READMEを参照）';
-    document.querySelector(LLM.hasWebGPU() ? 'input[value="webllm-large"]' : 'input[value="none"]').checked = true;
+    document.querySelector(LLM.hasWebGPU() && !(isMobile() && isTouch()) ? 'input[value="webllm-large"]' : 'input[value="none"]').checked = true;
   }
 })();
 
@@ -52,7 +65,8 @@ LLM.onSwitched = (ok) => { aiLoad = null; toast(ok ? '🧠 ブラウザ内AIに�
 let aiLoad = null;
 
 async function prepareAI() {
-  const mode = document.querySelector('input[name=mode]:checked').value;
+  const sel = document.querySelector('input[name=mode]:checked');
+  const mode = !sel || sel.disabled ? 'none' : sel.value;
   $('#start').disabled = true;
   if (LLM.ready && LLM.mode === mode) return;
   if (mode === 'none') { LLM.mode = 'none'; return; }
@@ -100,6 +114,8 @@ function enterGameScreen() {
   $('#start').disabled = false;
   resize();
   setSpeed(1);
+  if (isMobile()) { view.showMinimap = false; closeSheet(); }
+  boardReadSeq = S.postSeq;
   view.camX = S.player.x - cv.width / view.zoom / 2;
   view.camY = S.player.y - cv.height / view.zoom / 2;
   boardSig = ''; logSig = ''; lastAutoDay = day();
@@ -130,7 +146,8 @@ function startGame() {
   Sim.initGame(Date.now());
   enterGameScreen();
   lastBoardSeen = S.postSeq;
-  toast('WASD/矢印で移動（Shiftで走る）。人や建物の中で F キー。');
+  if (isTouch()) toast('画面をなぞって移動（大きく倒すと走る）。人や建物の近くで右下の丸ボタン。');
+  else toast('WASD/矢印で移動（Shiftで走る）。人や建物の中で F キー。');
   toast('目の前の🏡があなたの家。タンスにお金をしまえる。');
   if (LLM.available()) toast('住民はAIで話します。自由に話しかけてみよう。');
 }
@@ -202,12 +219,19 @@ function loop(now) {
 }
 requestAnimationFrame(loop);
 
-function resize() {
+function fitCanvas() {
   const r = $('#stage').getBoundingClientRect();
-  cv.width = Math.floor(r.width); cv.height = Math.floor(r.height);
+  const w = Math.floor(r.width), h = Math.floor(r.height);
+  if (w && h && (cv.width !== w || cv.height !== h)) { cv.width = w; cv.height = h; }
+}
+function resize() {
+  applyLayout();
+  fitCanvas();
   view.zoom = clamp(Math.round((Math.min(cv.width, cv.height * 1.3) / 700) * 4) / 4, 1, 2);
 }
 window.addEventListener('resize', resize);
+// 下のパネルを開け閉めしたときなど、画面の大きさだけ変わったとき（拡大率はそのまま）
+new ResizeObserver(fitCanvas).observe($('#stage'));
 
 // ---------- 入力 ----------
 const typing = () => ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
@@ -232,6 +256,69 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 window.addEventListener('blur', () => keys.clear());
+// ---------- タッチ操作 ----------
+// 画面のどこでもなぞるとスティックになる。2本指で拡大・縮小。
+const joy = { id: null, ox: 0, oy: 0, vx: 0, vy: 0, run: false };
+const pinch = new Map();
+let pinchStart = null;
+const JOY_R = 60;
+function joyHome() {
+  const el = $('#joy');
+  if (joy.id != null) return;
+  el.style.left = '84px'; el.style.top = (cv.height - 84) + 'px';
+  $('#joy-knob').style.transform = '';
+  el.classList.remove('on', 'run');
+}
+cv.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'mouse') return;
+  e.preventDefault();
+  if (menuFor) closeMenu();
+  pinch.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch.size === 2) {
+    // 2本目の指：スティックをやめて拡大・縮小へ
+    joy.id = null; joy.vx = joy.vy = 0; joyHome();
+    const [a, b] = [...pinch.values()];
+    pinchStart = { d: Math.hypot(a.x - b.x, a.y - b.y), zoom: view.zoom };
+    return;
+  }
+  if (joy.id != null || pinch.size > 2) return;
+  cv.setPointerCapture?.(e.pointerId);
+  const r = cv.getBoundingClientRect();
+  joy.id = e.pointerId; joy.ox = e.clientX; joy.oy = e.clientY; joy.vx = joy.vy = 0; joy.run = false;
+  const el = $('#joy');
+  el.style.left = (e.clientX - r.left) + 'px'; el.style.top = (e.clientY - r.top) + 'px';
+  el.classList.add('on');
+}, { passive: false });
+cv.addEventListener('pointermove', (e) => {
+  if (!pinch.has(e.pointerId)) return;
+  pinch.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch.size >= 2 && pinchStart) {
+    const [a, b] = [...pinch.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    view.zoom = clamp(Math.round(pinchStart.zoom * (d / Math.max(1, pinchStart.d)) * 20) / 20, 0.75, 2.5);
+    return;
+  }
+  if (e.pointerId !== joy.id) return;
+  let dx = e.clientX - joy.ox, dy = e.clientY - joy.oy;
+  const len = Math.hypot(dx, dy);
+  if (len > JOY_R) { dx = dx / len * JOY_R; dy = dy / len * JOY_R; }
+  joy.vx = len > 8 ? dx / JOY_R : 0; joy.vy = len > 8 ? dy / JOY_R : 0;
+  joy.run = len > JOY_R * 0.95;
+  $('#joy-knob').style.transform = `translate(${dx}px, ${dy}px)`;
+  $('#joy').classList.toggle('run', joy.run);
+});
+function pointerEnd(e) {
+  pinch.delete(e.pointerId);
+  if (pinch.size < 2) pinchStart = null;
+  if (e.pointerId === joy.id) { joy.id = null; joy.vx = joy.vy = 0; joy.run = false; joyHome(); }
+}
+cv.addEventListener('pointerup', pointerEnd);
+cv.addEventListener('pointercancel', pointerEnd);
+$('#act').addEventListener('click', (e) => { e.preventDefault(); interactKey(); });
+$('#callout').addEventListener('click', () => interactKey());
+document.addEventListener('gesturestart', (e) => e.preventDefault());   // iPhoneのページ拡大を止める
+$('#map-btn').onclick = () => { view.showMinimap = !view.showMinimap; };
+
 cv.addEventListener('wheel', (e) => { e.preventDefault(); view.zoom = clamp(view.zoom + (e.deltaY < 0 ? 0.25 : -0.25), 0.75, 2.5); }, { passive: false });
 
 function movePlayer(dt) {
@@ -244,9 +331,14 @@ function movePlayer(dt) {
   if (keys.has('s') || keys.has('arrowdown')) vy += 1;
   if (keys.has('a') || keys.has('arrowleft')) vx -= 1;
   if (keys.has('d') || keys.has('arrowright')) vx += 1;
+  let touchRun = false, len;
+  if (!vx && !vy && (joy.vx || joy.vy)) {
+    // スティック：倒し具合で速さが変わる（最大まで倒すと走る）
+    vx = joy.vx; vy = joy.vy; touchRun = joy.run;
+    len = Math.hypot(vx, vy) / Math.max(0.35, Math.min(1, Math.hypot(vx, vy)));
+  } else len = Math.hypot(vx, vy);
   if (!vx && !vy) return;
-  const len = Math.hypot(vx, vy);
-  const run = keys.has('shift') ? 1.6 : 1;
+  const run = keys.has('shift') || touchRun ? 1.6 : 1;
   const sp = PLAYER_SPEED * run * (p.hunger < 15 ? 0.6 : 1) * dt;
   const x0 = p.x, y0 = p.y;
   tryMove(p, (vx / len) * sp, 0);
@@ -344,6 +436,7 @@ function openCharMenu(t) {
     };
     m.appendChild(b);
   });
+  addMenuClose(m);
   m.hidden = false;
 }
 
@@ -361,6 +454,7 @@ function openFacMenu(f) {
     b.onclick = () => { closeMenu(); if (a.id === 'report') openPicker(); else Sim.doFacility(f.id, a.id); };
     m.appendChild(b);
   });
+  addMenuClose(m);
   m.hidden = false;
 }
 
@@ -379,9 +473,16 @@ function openBoardMenu() {
     b.onclick = () => { closeMenu(); a.fn(); };
     m.appendChild(b);
   });
+  addMenuClose(m);
   m.hidden = false;
 }
 
+function addMenuClose(m) {
+  const b = document.createElement('button');
+  b.className = 'mclose'; b.textContent = '閉じる';
+  b.onclick = closeMenu;
+  m.appendChild(b);
+}
 function closeMenu() {
   menuFor = null; $('#menu').hidden = true;
   if (!chatTarget) S.holdId = null;
@@ -412,7 +513,7 @@ function openChat(t) {
   }
   renderTradeBar();
   updateChatRel();
-  setTimeout(() => $('#chat-text').focus(), 50);
+  if (!isTouch()) setTimeout(() => $('#chat-text').focus(), 50);   // スマホではいきなりキーボードを出さない
 }
 
 // 会話中に渡せる物
@@ -522,11 +623,31 @@ $('#picker-close').onclick = closePicker;
 // パネルは全部表示されているので、キーで呼ばれたら枠を光らせるだけ
 function switchTab(tab) {
   currentTab = tab;
+  if (isMobile()) { openSheet(tab); updateUI(); return; }
   const el = $('#tab-' + tab)?.closest('.panel');
   if (el) { el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 900); }
   if (tab === 'board') { boardSig = ''; $('#post-text').focus(); }
   updateUI();
 }
+
+// スマホ：下のタブで1つずつ開く
+let boardReadSeq = 0;
+function openSheet(tab) {
+  currentTab = tab;
+  document.body.classList.add('sheet');
+  document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('active', p.id === 'p-' + tab));
+  document.querySelectorAll('#mtabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
+  if (tab === 'board') boardSig = '';
+}
+function closeSheet() {
+  document.body.classList.remove('sheet');
+  document.querySelectorAll('#mtabs button').forEach((b) => b.classList.remove('on'));
+}
+document.querySelectorAll('#mtabs button').forEach((b) => b.onclick = () => {
+  if (document.body.classList.contains('sheet') && currentTab === b.dataset.tab) closeSheet();
+  else { openSheet(b.dataset.tab); updateUI(); }
+});
+document.querySelectorAll('.panel h3').forEach((h) => h.addEventListener('click', () => { if (isMobile()) closeSheet(); }));
 
 document.querySelectorAll('#speed [data-speed]').forEach((b) => b.onclick = () => setSpeed(+b.dataset.speed));
 function setSpeed(v) {
@@ -570,7 +691,25 @@ function updateUI() {
   }
   const followers = S.chars.filter((c) => c.companion);
   if (followers.length) hint += (hint ? '　' : '') + `🤝 ${followers.map((c) => c.name).join('・')}が同行中`;
+  if (isTouch()) hint = hint.replace(/^F：/, '⭕ ');
   $('#hint').textContent = hint;
+  if (isTouch()) {
+    const act = $('#act');
+    const callout = S.callout && performance.now() < S.callout.until;
+    const label = callout ? '返事' : menuFor ? '閉じる' : !n || Sim.playerBusy() ? '調べる'
+      : n.type === 'char' ? '話す' : n.type === 'fac' ? '入る・使う' : n.type === 'board' ? '掲示板' : '拾う';
+    if ($('#act-label').textContent !== label) $('#act-label').textContent = label;
+    act.classList.toggle('idle', !callout && !menuFor && (!n || Sim.playerBusy()));
+    if (joy.id == null) joyHome();
+  }
+  const bd = document.body.classList;
+  bd.toggle('menu-open', !!menuFor);
+  bd.toggle('meeting-open', !$('#meeting').hidden);
+  bd.toggle('callout-on', !$('#callout').hidden);
+  bd.toggle('minimap', !!view.showMinimap);
+  const sheetBoard = bd.contains('sheet') && currentTab === 'board';
+  if (!isMobile() || sheetBoard) boardReadSeq = S.postSeq;
+  $('#mtabs .dot').hidden = S.postSeq <= boardReadSeq;
   const busyEl = $('#busy');
   if (p.alive && Sim.playerBusy()) {
     busyEl.hidden = false;
