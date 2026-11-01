@@ -16,11 +16,25 @@ const NEURON_RATES = {
   '@cf/meta/llama-3.1-8b-instruct-awq': [11161, 24215],
 };
 const USAGE_KEY = 'nariyuki-ai-usage';
+const DENSITY_KEY = 'nariyuki-ai-density';
+// 住民の「考える力」（AIの濃さ）。low=控えめ normal=ふつう high=濃い
+export const DENSITY = {
+  low: { label: '控えめ', plans: false, chats: 0, diary: false, posts: 6 },
+  normal: { label: 'ふつう', plans: true, chats: 6, diary: true, posts: 12 },
+  high: { label: '濃い', plans: true, chats: 14, diary: true, posts: 20 },
+};
 const utcDay = () => new Date().toISOString().slice(0, 10);
 
 export const LLM = {
   mode: 'none',
   ready: false,
+  density: (typeof localStorage !== 'undefined' && localStorage.getItem(DENSITY_KEY)) || 'normal',
+  setDensity(d) { if (DENSITY[d]) { this.density = d; try { localStorage.setItem(DENSITY_KEY, d); } catch {} } },
+  // いまの濃さの設定。クラウドAIの無料枠を75%使ったら、裏方は自動で「控えめ」にして会話の分を残す
+  dens() {
+    if (this.mode === 'api' && this.usagePct() >= 75) return DENSITY.low;
+    return DENSITY[this.density] || DENSITY.normal;
+  },
   engine: null,
   pending: 0,
   _chain: Promise.resolve(),
@@ -33,6 +47,7 @@ export const LLM = {
       if (!res.ok) return false;
       const j = await res.json();
       if (j.model) this.apiModel = j.model;
+      if (j.light) this.lightModel = j.light;
       return !!j.ai;
     } catch { return false; }
   },
@@ -108,11 +123,11 @@ export const LLM = {
     return { day: utcDay(), neurons: 0, calls: 0 };
   },
   usagePct() { return Math.min(100, Math.round(this.usage().neurons / DAILY_NEURONS * 100)); },
-  addUsage(messages, text, usage) {
+  addUsage(messages, text, usage, model) {
     // usage が返ってこないときは、日本語1文字≒1トークンで見積もる
     const inTok = usage?.prompt_tokens ?? messages.reduce((a, m) => a + String(m.content).length + 4, 0);
     const outTok = usage?.completion_tokens ?? String(text || '').length;
-    const [ri, ro] = NEURON_RATES[this.apiModel] || NEURON_RATES['@cf/meta/llama-3.3-70b-instruct-fp8-fast'];
+    const [ri, ro] = NEURON_RATES[model || this.apiModel] || NEURON_RATES['@cf/meta/llama-3.3-70b-instruct-fp8-fast'];
     const u = this.usage();
     u.neurons += (inTok * ri + outTok * ro) / 1e6;
     u.calls += 1;
@@ -128,7 +143,8 @@ export const LLM = {
   generating() { return this.pending > 0; },
 
   // 直列実行（エンジンは1つなので順番待ち）
-  complete(messages, { maxTokens = 160, temperature = 0.8 } = {}) {
+  // tier: 'main'（あなたとの会話）／'light'（住民が裏で考えること。安いモデル）
+  complete(messages, { maxTokens = 160, temperature = 0.8, tier = 'main' } = {}) {
     if (!this.available()) return Promise.resolve(null);
     this.pending++;
     const run = async () => {
@@ -136,7 +152,7 @@ export const LLM = {
         if (this.mode === 'api') {
           const res = await fetch('./api/chat', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messages, max_tokens: maxTokens, temperature }),
+            body: JSON.stringify({ messages, max_tokens: maxTokens, temperature, tier }),
           });
           if (!res.ok) {
             // 429 = 今日の無料枠を使い切った。他のエラーも3回続いたら切り替える
@@ -147,13 +163,13 @@ export const LLM = {
           }
           this.apiFails = 0;
           const j = await res.json();
-          this.addUsage(messages, j.text, j.usage);
-          return j.text ?? null;
+          this.addUsage(messages, j.text, j.usage, j.model);
+          return stripThink(j.text);
         }
         const r = await this.engine.chat.completions.create({
           messages, max_tokens: maxTokens, temperature,
         });
-        return r.choices?.[0]?.message?.content ?? null;
+        return stripThink(r.choices?.[0]?.message?.content);
       } catch (e) {
         console.warn('LLM error', e);
         return null;
@@ -161,6 +177,8 @@ export const LLM = {
         this.pending--;
       }
     };
+    // クラウドAIは同時に頼める（裏方の考えごとで、会話の返事を待たせない）。ブラウザ内AIは1つずつ
+    if (this.mode === 'api') return run();
     const p = this._chain.then(run, run);
     this._chain = p.catch(() => {});
     return p;
@@ -171,6 +189,11 @@ export const LLM = {
     return parseJSON(text);
   },
 };
+
+function stripThink(t) {
+  if (t == null) return null;
+  return String(t).replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+}
 
 export function parseJSON(text) {
   if (!text) return null;

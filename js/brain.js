@@ -56,6 +56,7 @@ function holderName() {
   return h ? (h.isPlayer ? 'よそ者' : h.name) : '誰か';
 }
 
+export const situationText = () => situation();
 function situation() {
   const parts = [`町の食料の蓄えは${Math.floor(S.foodStock)}食分`];
   if (S.droughtUntilDay >= day()) parts.push('日照りで畑の実りが悪い');
@@ -70,7 +71,7 @@ function situation() {
   return parts.join('。');
 }
 
-function needs(c) {
+export function needs(c) {
   const n = [];
   if (c.hunger < 35) n.push('お腹がとても空いている');
   if (c.hp < 50) n.push('けがをしている');
@@ -78,11 +79,11 @@ function needs(c) {
   return n.join('、');
 }
 
-function personaOf(c) {
+export function personaOf(c) {
   return c.persona || `${jobName(c)}をしている町の住民の${c.female ? '女性' : '男性'}。`;
 }
 
-function relSummary(c) {
+export function relSummary(c) {
   const arr = Object.entries(c.rel)
     .filter(([id]) => id !== 'player')
     .map(([id, r]) => ({ n: S.chars.find((x) => x.id === id)?.name, ...r }))
@@ -100,6 +101,9 @@ function selfDesc(c) {
     `いま: ${day()}日目 ${timeStr()}、${locName(c)}で${actText(c)}。所持金${Math.floor(c.coins)}G。${needs(c)}\n` +
     `好きなもの: ${c.likes || '特になし'}。ほかの住民への気持ち: ${relSummary(c)}\n` +
     `最近の記憶: ${c.memory.slice(-4).join(' / ') || '特になし'}\n` +
+    (c.intent?.thought ? `今日の心の声: ${c.intent.thought}\n` : '') +
+    (c.dayPlan?.length ? `今日の予定: ${c.dayPlan.map((x) => `${x.hour}時${x.done ? '(済)' : ''} ${x.do}${x.why ? '・' + x.why : ''}`).join('、')}\n` : '') +
+    (c.diary?.length ? `これまでの日記: ${c.diary.slice(-2).join(' / ')}\n` : '') +
     `町の様子: ${situation()}` + wolfDesc(c);
 }
 
@@ -1045,7 +1049,8 @@ async function llmPhrase(c, text, history, res) {
   const msgs = [{ role: 'system', content: sys }];
   for (const h of history.slice(-6)) msgs.push({ role: h.who === 'player' ? 'user' : 'assistant', content: h.text });
   msgs.push({ role: 'user', content: text });
-  const out = cleanSay(await LLM.complete(msgs, { maxTokens: 90, temperature: res.mode === 'free' ? 0.8 : 0.6 }));
+  // あなたとの会話は高品質なAI、話し合いのセリフの言い直しなど裏方は安いAI
+  const out = cleanSay(await LLM.complete(msgs, { maxTokens: 90, temperature: res.mode === 'free' ? 0.8 : 0.6, tier: res.kind === 'polish' ? 'light' : 'main' }));
   if (!out) return null;
   // 判断と逆のことを言っていたら採用しない
   if (res.follow && /(無理|やめとく|遠慮|行けない|行かない|断る|パス)/.test(out)) return null;
@@ -1187,7 +1192,7 @@ const TOPIC_TEXT = {
 const bg = { day: 0, n: 0 };
 function bgBudget(cost = 1) {
   if (bg.day !== day()) { bg.day = day(); bg.n = 0; }
-  if (bg.n + cost > (LLM.mode === 'api' ? 30 : 6)) return false;
+  if (bg.n + cost > (LLM.mode === 'api' ? LLM.dens().posts : 6)) return false;
   bg.n += cost;
   return true;
 }
@@ -1201,7 +1206,7 @@ export async function postAbout(c, topic, t = {}) {
       { role: 'system', content: selfDesc(c) + '\nあなたは町の掲示板に短く書き込みます。あなたの口調で、40文字以内の日本語。本文だけを出力し、かぎかっこや名前は付けない。' },
       { role: 'user', content: `きっかけ: ${TOPIC_TEXT[topic](c, t)}` },
     ];
-    text = cleanSay(await LLM.complete(msgs, { maxTokens: 80, temperature: 0.85 }));
+    text = cleanSay(await LLM.complete(msgs, { maxTokens: 80, temperature: 0.85, tier: 'light' }));
   }
   if (!text) text = POST_TEMPLATES[topic](c, t);
   post(c.name, text, { authorId: c.id });
@@ -1215,7 +1220,7 @@ export async function replyTo(c, p) {
       { role: 'system', content: selfDesc(c) + '\n町の掲示板の書き込みに返信します。あなたの口調で、40文字以内の日本語。本文だけを出力する。書き込みの内容を鵜呑みにする必要はない。' },
       { role: 'user', content: `${p.author}の書き込み: 「${p.text}」` },
     ];
-    text = cleanSay(await LLM.complete(msgs, { maxTokens: 80, temperature: 0.85 }));
+    text = cleanSay(await LLM.complete(msgs, { maxTokens: 80, temperature: 0.85, tier: 'light' }));
   }
   if (!text) {
     const r = rel(c, 'player');
@@ -1228,12 +1233,13 @@ export async function replyTo(c, p) {
 
 // ================= 1日の方針 =================
 export async function dailyIntent(c) {
-  if (c.key && LLM.strong() && LLM.idle() && bgBudget(2)) {
+  // 「ふつう」「濃い」では、朝にAIが全員の予定をまとめて立てる（mind.js）ので、ここはルールだけ
+  if (c.key && LLM.strong() && LLM.idle() && !LLM.dens().plans && bgBudget(2)) {
     const msgs = [
       { role: 'system', content: selfDesc(c) + '\n今日一日の方針を決めます。次のJSONだけを出力:\n{"stance":"peaceful|work|scheme|aggressive","target":"気になる住民の名前 または null","thought":"今日の心の声(20文字以内)"}\npeaceful=仲良く助け合う work=真面目に働く scheme=ずる賢く立ち回る aggressive=力で押し通す' },
       { role: 'user', content: '今日はどうする？' },
     ];
-    const j = await LLM.completeJSON(msgs, { maxTokens: 100, temperature: 0.9 });
+    const j = await LLM.completeJSON(msgs, { maxTokens: 100, temperature: 0.9, tier: 'light' });
     if (j && STANCES.includes(j.stance)) {
       c.intent = { stance: j.stance, target: S.chars.find((x) => x.name === j.target && x.id !== c.id)?.id || null, thought: cleanSay(j.thought) || '' };
       if (c.intent.thought) log(`🧠 ${c.name}の今日の心の声：「${c.intent.thought}」`, 'mind');

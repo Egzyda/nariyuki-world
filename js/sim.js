@@ -12,6 +12,7 @@ import * as Brain from './brain.js';
 import { placeName } from './dialog.js';
 import * as Wolf from './wolf.js';
 import * as Town from './town.js';
+import * as Mind from './mind.js';
 
 const MOVE_TILES_PER_MIN = 0.75;
 const FOUNTAIN_Y = (D.FOUNTAIN[1] + 1) * TILE;
@@ -96,7 +97,7 @@ export function initGame(seed = Date.now()) {
   Wolf.initWolf();
   Town.initTown();
   S.callout = null; S.nextApproachT = S.t + 60;
-  for (const c of rs) Brain.dailyIntent(c);
+  Mind.morning();
   post('町役場', 'ようこそナリユキワールドへ。この掲示板は誰でも自由に書き込めます。', { authorId: 'town' });
   post('町役場', '本日、町に新しい住人（よそ者）がやってきました。皆さん仲良くしましょう。', { authorId: 'town' });
   log(`あなたはナリユキワールドにやってきた。所持金は${D.START_COINS}G。町の南東の🏡があなたの家だ。`, 'event');
@@ -163,6 +164,7 @@ function hourly(h, d) {
   }
   if (d === D.EVENTS.meteor.day && h === S.meteorHour && !S.meteor) meteorFall();
   if (h === 22) for (const c of S.chars) if (c.companion) endCompanion(c, true, true);
+  if (h === 21) Mind.evening();   // 1日のふり返り（日記）
   Wolf.hourly(h);
   Town.hourly(h);
   if (h >= 7 && h <= 21 && chance(0.5)) tryApproach();
@@ -207,7 +209,7 @@ function daily(d) {
     }
   }
   const keys = residents().filter((c) => c.alive && c.key);
-  for (const c of residents()) if (c.alive) Brain.dailyIntent(c);
+  Mind.morning();   // 全員の今日の予定（AI）
   // 起きる時間をばらけさせる
   for (const c of residents()) if (c.alive && c.activity === 'sleep') c.busyUntil = S.t + Math.floor(S.rand() * 75);
   const poster = keys.filter(() => chance(0.35)).slice(0, 2);
@@ -407,6 +409,20 @@ function fidget(c) {
 
 const nextMorning = () => { const d = Math.floor(S.t / 1440); const m = d * 1440 + 6 * 60; return S.t < m ? m : m + 1440; };
 const facOpen = (id) => !S.fac[id] || S.fac[id].closedUntilDay < day();
+export const facIsOpen = facOpen;
+export const plazaTile = () => randomPlazaTile(S.rand);
+// AIの予定「よそ者に話しかける」
+export function planApproachPlayer(c) {
+  const pl = S.player;
+  if (!pl.alive || isJailed(pl) || c.companion || S.holdId === c.id) return false;
+  const topic = Brain.approachTopic(c);
+  if (!topic) return false;
+  c.approach = topic;
+  S.nextApproachT = S.t + 45;
+  setPlan(c, { targetId: 'player', kind: 'approach', giveUpAt: S.t + 60 });
+  log(`🗓️ ${c.name}がよそ者に話しかけに行く`, 'life');
+  return true;
+}
 
 // ---- 見える範囲（建物の中と外はお互い見えない） ----
 function zoneOf(c) {
@@ -591,6 +607,8 @@ function decide(c) {
   }
 
   if (c.hp < 50 && c.coins >= D.HEAL_COST && doctorAvailable() && c.job !== 'doctor' && h < 20) { setPlan(c, { place: 'clinic', act: 'heal' }); return; }
+  // AIが朝に立てた今日の予定
+  if (Mind.runPlan(c)) return;
 
   const grudge = Object.entries(c.rel)
     .map(([id, r]) => ({ t: byId(id), r }))
@@ -983,6 +1001,15 @@ export function interact(a, b, kind) {
   a.lastChatAt = S.t;
   switch (kind) {
     case 'chat': {
+      if (a.avoidId === b.id && a.avoidDay === day()) { a.busyUntil = S.t + 5; break; }   // 今日は避けている相手
+      // 予定で会いに行った相手や、気持ちが強い相手とは、AIが会話を作る（だめならいつもの会話）
+      if (Mind.wantsAiChat(a, b)) {
+        faceTo(b, a);
+        a.busyUntil = S.t + 30; if (!b.companion) b.busyUntil = Math.max(b.busyUntil, S.t + 30);
+        Mind.aiChat(a, b).then((ok) => { if (!ok && a.alive && b.alive) { const [la, lb] = Brain.npcDialogue(a, b, null); say(a, la); setTimeout(() => b.alive && say(b, lb), 1400); } });
+        shareRumor(a, b);
+        break;
+      }
       const rumor = pickRumor(a, b);
       const [la, lb] = Wolf.chatLines(a, b) || Brain.npcDialogue(a, b, rumor);
       say(a, la);

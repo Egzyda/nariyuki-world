@@ -6,6 +6,7 @@ import { S, day, timeStr, rel, residents, distTiles, isJailed, clamp, toast, log
 import * as Sim from './sim.js';
 import * as Brain from './brain.js';
 import * as Dlg from './dialog.js';
+import * as Mind from './mind.js';
 import * as Wolf from './wolf.js';
 import * as Town from './town.js';
 import { VERSION } from './version.js';
@@ -101,6 +102,19 @@ async function prepareAI() {
 }
 
 $('#start').onclick = async () => { await prepareAI(); startGame(); };
+
+// 住民の考える力（AIの濃さ）
+const DENSITY_NOTE = {
+  low: '住民はルールで動き、AIは会話と掲示板だけ。無料枠をいちばん節約できる。',
+  normal: '毎朝、住民がAIで1日の予定を立て、ときどき住民同士がAIで会話し、夜は日記を書く（安いAIを使うので無料枠の消費は少なめ）。',
+  high: '住民同士のAI会話がもっと増える。町のドラマが起きやすいが、無料枠を多めに使う。',
+};
+function renderDensity() {
+  document.querySelectorAll('#density [data-d]').forEach((b) => b.classList.toggle('on', b.dataset.d === LLM.density));
+  $('#density-note').textContent = DENSITY_NOTE[LLM.density] + '（クラウドAIの無料枠を75%使うと、自動で控えめになります）';
+}
+document.querySelectorAll('#density [data-d]').forEach((b) => b.onclick = () => { LLM.setDensity(b.dataset.d); renderDensity(); });
+renderDensity();
 
 // ---------- つづきから ----------
 function renderContinue() {
@@ -217,7 +231,7 @@ $('#update-btn').onclick = async () => {
   btn.disabled = true; $('#update-note').textContent = '最新版を読み込み中…';
   // ブラウザに残っている古いファイルを、サーバーの最新版で置き換えてから再読み込み
   const files = ['./', 'index.html', 'css/style.css', 'version.json', 'manifest.webmanifest',
-    ...['main', 'sim', 'world', 'render', 'sprites', 'state', 'data', 'brain', 'dialog', 'llm', 'llm-worker', 'wolf', 'town', 'version', 'save', 'icons'].map((f) => `js/${f}.js`)];
+    ...['main', 'sim', 'world', 'render', 'sprites', 'state', 'data', 'brain', 'dialog', 'llm', 'llm-worker', 'wolf', 'town', 'version', 'save', 'icons', 'mind'].map((f) => `js/${f}.js`)];
   await Promise.all(files.map((f) => fetch(f, { cache: 'reload' }).catch(() => {})));
   location.reload();
 };
@@ -965,6 +979,8 @@ function renderPeople() {
       好きなもの：${esc(c.likes || '')}${c.likesItem ? `（贈り物なら${ITEMS[c.likesItem].icon}${ITEMS[c.likesItem].name}）` : ''}<br>
       いる場所：${c.alive ? esc(Brain.locName(c)) : '―'}<br>
       ${c.intent?.thought ? `今日の心の声：「${esc(c.intent.thought)}」<br>` : ''}
+      ${c.dayPlan?.length ? `今日の予定：${c.dayPlan.map((x) => (x.done ? '✓' : '') + esc(Mind.planText(x))).join('／')}<br>` : ''}
+      ${c.diary?.length ? `日記：${c.diary.map(esc).join(' / ')}<br>` : ''}
       体力${Math.round(c.hp)} 満腹${Math.round(c.hunger)} 所持金${Math.floor(c.coins)}G
       ${c.items.length ? '<br>持ち物：' + c.items.map((i) => ITEMS[i].name).join('、') : ''}
       <br>記憶：${c.memory.slice(-3).map(esc).join(' / ') || 'なし'}
