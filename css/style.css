@@ -455,3 +455,6 @@ body:not(.mobile) #followbar { top: 10px; }
 #help-title-btn { font-size: 12px; padding: 5px 12px; border-radius: 16px; background: rgba(255,255,255,.08); color: #cfe0bf; }
 body.mobile .rel-box, body.mobile .help-box { max-height: none; }
 body.mobile #followbar { font-size: 12px; padding: 5px 10px; width: 92%; }
+/* PCのAI（Ollama）：使うAIの名前の入力 */
+.ollama-opts:not([hidden]) { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 12px; color: #d8dcc8; }
+.mode-card .ollama-opts input { display: inline-block; width: 130px; padding: 3px 6px; font-size: 13px; border-radius: 6px; border: 1px solid #6a6f5a; background: rgba(0,0,0,.35); color: #fff; }

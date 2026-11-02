@@ -51,18 +51,30 @@ fillIcons();
   } else {
     $('#gpu-note').textContent = 'ブラウザ内AIは初回にモデルをダウンロードします（2回目以降はキャッシュ）。';
   }
+  // PCのAI（Ollama）はPCだけ。選んだときだけ「使うAI」の入力を出す
+  if (isMobile() && isTouch()) {
+    const l = $('.pcai'); l.classList.add('disabled'); l.querySelector('input').disabled = true;
+    $('#ollama-note').textContent = 'PC専用です。';
+  }
+  $('#ollama-model').value = LLM.ollama.model;
+  $('#ollama-model').onchange = () => LLM.setOllamaModel($('#ollama-model').value);
+  const syncOllama = () => { $('#ollama-opts').hidden = !$('.pcai input').checked; };
+  document.querySelectorAll('input[name=mode]').forEach((r) => r.addEventListener('change', syncOllama));
+  try { const last = localStorage.getItem('nariyuki-brain'); if (last === 'ollama' && !$('.pcai input').disabled) $('.pcai input').checked = true; } catch {}
+  syncOllama();
   const api = await LLM.probeApi();
   const apiInput = $('.api input');
   if (api) {
-    apiInput.checked = true;
+    if (!$('.pcai input').checked) apiInput.checked = true;
     const pct = LLM.usagePct();
     if (pct > 0) $('#api-note').textContent = `今日の無料枠：約${pct}%使用${pct >= 100 ? '（使い切り。朝9時に回復）' : '（朝9時にリセット）'}`;
   }
   else {
     $('.api').classList.add('disabled'); apiInput.disabled = true;
     $('#api-note').textContent = '（未設定：Cloudflare Pages に Workers AI を追加すると使えます。READMEを参照）';
-    document.querySelector(LLM.hasWebGPU() && !(isMobile() && isTouch()) ? 'input[value="webllm-large"]' : 'input[value="none"]').checked = true;
+    if (!$('.pcai input').checked) document.querySelector(LLM.hasWebGPU() && !(isMobile() && isTouch()) ? 'input[value="webllm-large"]' : 'input[value="none"]').checked = true;
   }
+  syncOllama();
 })();
 
 // クラウドAIの無料枠が切れたら、ブラウザ内AIに切り替える
@@ -84,9 +96,11 @@ let aiLoad = null;
 async function prepareAI() {
   const sel = document.querySelector('input[name=mode]:checked');
   const mode = !sel || sel.disabled ? 'none' : sel.value;
+  try { localStorage.setItem('nariyuki-brain', mode); } catch {}
+  if (mode === 'ollama') return prepareOllama();
   $('#start').disabled = true;
-  if (LLM.ready && LLM.mode === mode) return;
-  if (mode === 'none') { LLM.mode = 'none'; LLM.chosen = 'none'; LLM.quotaOut = false; return; }
+  if (LLM.ready && LLM.mode === mode) return true;
+  if (mode === 'none') { LLM.mode = 'none'; LLM.chosen = 'none'; LLM.quotaOut = false; return true; }
   {
     $('#loading').hidden = false;
     try {
@@ -101,9 +115,37 @@ async function prepareAI() {
       await new Promise((r) => setTimeout(r, 1500));
     }
   }
+  return true;
 }
 
-$('#start').onclick = async () => { await prepareAI(); startGame(); };
+// PCのAI（Ollama）につなぐ。つながらなければ理由を出して、タイトルにとどまる
+async function prepareOllama() {
+  LLM.setOllamaModel($('#ollama-model').value);
+  const model = LLM.ollama.model;
+  if (LLM.ready && LLM.mode === 'ollama' && LLM.ollamaModel && LLM.ollamaModel.split(':')[0] === model.split(':')[0]) return true;
+  $('#start').disabled = true;
+  $('#continue').querySelectorAll('button').forEach((b) => b.disabled = true);
+  $('#ollama-note').textContent = `Ollama（${model}）を探しています…`;
+  try {
+    await LLM.init('ollama');
+    $('#ollama-note').textContent = `つながりました（${LLM.ollamaModel}）`;
+    toast(`🖥️ PCのAI（${LLM.ollamaModel}）につながりました`);
+    return true;
+  } catch (e) {
+    console.warn(e);
+    LLM.mode = 'none'; LLM.ready = false;
+    $('#ollama-note').textContent = e.message === 'nomodel'
+      ? `Ollamaにはつながりましたが「${model}」が入っていません。PowerShellで「ollama pull ${model}」を実行してください。${e.names?.length ? `（入っているAI：${e.names.join('、')}）` : ''}`
+      : 'Ollamaにつながりませんでした。Ollamaが起動しているか、OLLAMA_ORIGINS の設定のあとOllamaを再起動したかを確かめてください（READMEの「PCのAI」）。ブラウザが「ローカルネットワークへのアクセス」を聞いてきたら「許可」。';
+    $('.pcai').scrollIntoView({ block: 'center', behavior: 'smooth' });
+    return false;
+  } finally {
+    $('#start').disabled = false;
+    $('#continue').querySelectorAll('button').forEach((b) => b.disabled = false);
+  }
+}
+
+$('#start').onclick = async () => { if (await prepareAI()) startGame(); };
 
 // ---- 町の設定（法律・人狼の数）。前回の選択を覚えておく ----
 try { Object.assign(SETUP, JSON.parse(localStorage.getItem('nariyuki-setup') || '{}')); } catch {}
@@ -142,7 +184,7 @@ function renderContinue() {
     if (!i) continue;
     const b = document.createElement('button');
     b.innerHTML = `▶ つづきから：${Save.SLOT_NAME[slot]}<small>${i.day}日目 ${i.time}　（${new Date(i.at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} 保存）</small>`;
-    b.onclick = async () => { await prepareAI(); continueGame(slot); };
+    b.onclick = async () => { if (await prepareAI()) continueGame(slot); };
     box.appendChild(b);
   }
 }
@@ -927,7 +969,7 @@ function aiStatusBox() {
   if (!LLM.chosen || LLM.chosen === 'none') return '';
   const u = LLM.usage(), pct = LLM.usagePct();
   const now = LLM.quotaOut && LLM.mode === 'none' ? '📜 無料枠切れ：AIなしで返事中（朝9時に回復）'
-    : LLM.mode === 'api' ? '☁️ クラウドAIで返事中' : LLM.mode === 'webllm-large' ? '🧠 ブラウザ内AIで返事中' : '📜 AIなしで返事中';
+    : LLM.mode === 'api' ? '☁️ クラウドAIで返事中' : LLM.mode === 'webllm-large' ? '🧠 ブラウザ内AIで返事中' : LLM.mode === 'ollama' ? `🖥️ PCのAI（${LLM.ollamaModel}）で返事中` : '📜 AIなしで返事中';
   return `<div class="box"><h4>住民の頭脳</h4>${now}
     ${LLM.chosen === 'api' || LLM.quotaOut ? `<div class="ai-meter">今日の無料枠：約${pct}%使用（AIへの依頼 ${u.calls}回）</div>${meter(pct, 100, pct >= 85 ? '#e06050' : '#5a9ad0')}<small style="color:#999">毎朝9時（日本時間）にリセット。数字は目安です</small>` : ''}
   </div>`;

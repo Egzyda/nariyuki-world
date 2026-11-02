@@ -1274,7 +1274,7 @@ const TOPIC_TEXT = {
 const bg = { day: 0, n: 0 };
 function bgBudget(cost = 1) {
   if (bg.day !== day()) { bg.day = day(); bg.n = 0; }
-  if (bg.n + cost > (LLM.mode === 'api' ? LLM.dens().posts : 6)) return false;
+  if (bg.n + cost > (LLM.mode === 'api' || LLM.mode === 'ollama' ? LLM.dens().posts : 6)) return false;
   bg.n += cost;
   return true;
 }

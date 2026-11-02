@@ -40,6 +40,10 @@
         <span class="mc-icon">☁️</span><span class="mc-body"><b>クラウドAI <em>おすすめ</em></b><small>PCに負担なし。無料枠を使い切ったら自動でブラウザ内AIへ</small><span id="api-note" class="note"></span></span></label>
       <label class="mode-card webgpu"><input type="radio" name="mode" value="webllm-large">
         <span class="mc-icon">🧠</span><span class="mc-body"><b>ブラウザ内AI</b><small>自分のPCのGPUで動かす（約5GB・GPUメモリ8GB以上推奨）</small></span></label>
+      <label class="mode-card pcai"><input type="radio" name="mode" value="ollama">
+        <span class="mc-icon">🖥️</span><span class="mc-body"><b>PCのAI（Ollama）</b><small>PCに入れたAIアプリを使う。回数制限なし・AIはPCに保存されて消えない（準備はREADME）</small>
+        <span id="ollama-opts" class="ollama-opts" hidden>使うAI <input id="ollama-model" type="text" spellcheck="false" autocomplete="off"></span>
+        <span id="ollama-note" class="note"></span></span></label>
       <label class="mode-card"><input type="radio" name="mode" value="none" checked>
         <span class="mc-icon">📜</span><span class="mc-body"><b>AIなし</b><small>すぐ遊べる。言葉の意味を読み取って返事する</small></span></label>
       <div id="gpu-note" class="note"></div>
@@ -200,6 +204,7 @@
       <p>職場の住民に「雇ってください」。職業ごとに能力がある（衛兵は逮捕、医者は治療、料理人はまかない…）。状態タブで確認。</p>
       <h4>🧠 住民の頭脳</h4>
       <p>住民は毎朝AIで予定を立て、住民同士で話し、夜は日記を書く。仲が深まると親友・恋人、こじれると犬猿の仲になる。住民タブの「👁 観察する」でその人を追いかけられ、「🕸 関係図」で人間関係が見られる。記録タブで町の動きがわかる。</p>
+      <p>頭脳は「クラウドAI」「ブラウザ内AI」「PCのAI（Ollama）」「AIなし」から選べる。PCのAIは、PCに無料のAIアプリ「Ollama」を入れて使う（回数制限なし。準備のしかたは README）。</p>
       <h4>📝 そのほか</h4>
       <p>右上の「📝やること」に頼まれごと・約束・相談が出る。毎朝の📰朝刊で前の日の出来事がわかる。💾でセーブ（毎朝オートセーブもある）。</p>
     </div>

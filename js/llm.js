@@ -23,6 +23,10 @@ export const DENSITY = {
   normal: { label: 'ふつう', plans: true, chats: 6, diary: true, posts: 12 },
   high: { label: '濃い', plans: true, chats: 14, diary: true, posts: 20 },
 };
+// PCのAI（Ollama）。PCに入れた無料のAIアプリに、ブラウザから直接話しかける
+export const OLLAMA_URL = 'http://localhost:11434';
+export const OLLAMA_MODEL = 'gemma3:12b';
+const OLLAMA_KEY = 'nariyuki-ollama-model';
 const utcDay = () => new Date().toISOString().slice(0, 10);
 
 export const LLM = {
@@ -37,6 +41,8 @@ export const LLM = {
   },
   engine: null,
   pending: 0,
+  ollama: { url: OLLAMA_URL, model: (typeof localStorage !== 'undefined' && localStorage.getItem(OLLAMA_KEY)) || OLLAMA_MODEL },
+  setOllamaModel(m) { this.ollama.model = (m || '').trim() || OLLAMA_MODEL; try { localStorage.setItem(OLLAMA_KEY, this.ollama.model); } catch {} },
   _chain: Promise.resolve(),
 
   hasWebGPU() { return !!navigator.gpu; },
@@ -59,6 +65,7 @@ export const LLM = {
     this.ready = false;
     if (mode === 'none') return true;
     if (mode === 'api') { this.ready = true; return true; }
+    if (mode === 'ollama') { await this.connectOllama(); this.ready = true; return true; }
     await this.loadBrowser(mode, onProgress);
     this.ready = true;
     return true;
@@ -77,6 +84,23 @@ export const LLM = {
       console.warn('Web Worker でのAI起動に失敗。画面と同じスレッドで動かします', e);
       this.engine = await webllm.CreateMLCEngine(model.id, opts);
     }
+  },
+
+  // PCのAI（Ollama）につながるか確かめる。だめなら理由（connect／nomodel）を投げる
+  async connectOllama() {
+    const want = this.ollama.model;
+    let r;
+    try { r = await fetch(`${this.ollama.url}/api/tags`, { cache: 'no-store' }); }
+    catch { throw new Error('connect'); }
+    if (!r.ok) throw new Error('connect');
+    const j = await r.json().catch(() => ({}));
+    const names = (j.models || []).map((m) => m.name);
+    const hit = names.find((n) => n === want || n === `${want}:latest`) || names.find((n) => n.split(':')[0] === want);
+    if (!hit) { const e = new Error('nomodel'); e.names = names; throw e; }
+    this.ollamaModel = hit;
+    // 最初の1回でAIをグラボに読み込んでおく（返事は待たない）
+    fetch(`${this.ollama.url}/api/chat`, { method: 'POST', body: JSON.stringify({ model: hit, messages: [{ role: 'user', content: 'こんにちは' }], stream: false, keep_alive: '30m', options: { num_predict: 1 } }) }).catch(() => {});
+    return true;
   },
 
   // クラウドAIの無料枠切れ → ブラウザ内AIへ切り替え（切り替え中はAIなしで動く）
@@ -136,7 +160,7 @@ export const LLM = {
 
   available() { return this.mode !== 'none' && this.ready; },
   // 日本語を自然に書き換えられるだけの大きさがあるモデルか
-  strong() { return this.available() && (this.mode === 'webllm-large' || this.mode === 'api'); },
+  strong() { return this.available() && ['webllm-large', 'api', 'ollama'].includes(this.mode); },
   busy() { return this.pending > 2; },
   // 裏方の生成（掲示板・方針）は、AIが空いているときだけ
   idle() { return this.available() && this.pending === 0; },
@@ -166,6 +190,15 @@ export const LLM = {
           this.addUsage(messages, j.text, j.usage, j.model);
           return stripThink(j.text);
         }
+        if (this.mode === 'ollama') {
+          const body = { model: this.ollamaModel || this.ollama.model, messages, stream: false, keep_alive: '30m',
+            options: { temperature, top_p: 0.9, num_predict: maxTokens, num_ctx: 4096 } };
+          if (/qwen3/i.test(body.model)) body.think = false;
+          const r = await fetch(`${this.ollama.url}/api/chat`, { method: 'POST', body: JSON.stringify(body) });
+          if (!r.ok) throw new Error(`ollama ${r.status}`);
+          const j = await r.json();
+          return stripThink(j.message?.content);
+        }
         const r = await this.engine.chat.completions.create({
           messages, max_tokens: maxTokens, temperature,
         });
@@ -177,7 +210,7 @@ export const LLM = {
         this.pending--;
       }
     };
-    // クラウドAIは同時に頼める（裏方の考えごとで、会話の返事を待たせない）。ブラウザ内AIは1つずつ
+    // クラウドAIは同時に頼める（裏方の考えごとで、会話の返事を待たせない）。ブラウザ内AI・PCのAIは1つずつ
     if (this.mode === 'api') return run();
     const p = this._chain.then(run, run);
     this._chain = p.catch(() => {});
